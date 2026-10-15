@@ -1,6 +1,6 @@
 /*
  * =====================================================================
- *  DIY ARCADE STICK FIRMWARE  v2.2
+ *  DIY ARCADE STICK FIRMWARE  v2.3
  *  Freenove ESP32-S3 2.8" Display (FNK0104, non-touch)
  *  + MCP23017 I/O expander (all buttons and stick)
  *
