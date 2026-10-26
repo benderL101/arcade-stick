@@ -1,6 +1,8 @@
 /*
  * =====================================================================
- *  DIY ARCADE STICK FIRMWARE  v2.3
+ *  DIY ARCADE STICK FIRMWARE  v2.4
+ *  One firmware for every stick: the colour (and so the Bluetooth name)
+ *  and the wiring are chosen in the stick's own menu.
  *  Freenove ESP32-S3 2.8" Display (FNK0104, non-touch)
  *  + MCP23017 I/O expander (all buttons and stick)
  *
@@ -37,6 +39,7 @@
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
 #include "esp_sleep.h"
+#include "esp_ota_ops.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Update.h>
@@ -81,21 +84,14 @@
 #define PIN_AMP_EN   1       // LOW = amplifier on
 #define ES8311_ADDR  0x18
 
-#ifdef STICK_BLUE
-#define DEVICE_NAME "Arcade Stick Blue"   // own name, so the two sticks are easy to tell apart
-#else
-#define DEVICE_NAME "Arcade Stick"
-#endif
-#ifdef STICK_BLUE
-#define STICK_COLOUR_NAME "Blue"
-#define STICK_ACCENT      0x2B7F   // blue
-#define DEFAULT_PLAYER    1        // P2
-#else
-#define STICK_COLOUR_NAME "Red"
-#define STICK_ACCENT      0xE145   // red
+// Stick colour: picked in Menu -> Colour. It sets the screen accent, the
+// Bluetooth / USB name ("Arcade Stick Green") and the Wi-Fi name, so several
+// sticks are easy to tell apart.
+#define COLOUR_COUNT 8
+const char *COLOUR_NAME[COLOUR_COUNT] = {"Blue", "Red", "Green", "Yellow", "Orange", "Purple", "Pink", "White"};
+const uint16_t COLOUR_RGB[COLOUR_COUNT] = {0x2B7F, 0xE145, 0x3E4B, 0xFE60, 0xFC40, 0xAA9C, 0xF8B6, 0xE73C};
 #define DEFAULT_PLAYER    0        // P1
-#endif
-#define FW_VERSION  "2.3"
+#define FW_VERSION  "2.4"
 #define UPDATE_REPO "benderL101/arcade-stick"   // GitHub repo the stick checks for new releases
 
 // Power off: hold START this long. While off the board naps and checks
@@ -114,31 +110,46 @@ enum Phys : uint8_t {
 // MCP23017 pin for each input. GPA0-6 = bits 0-6, GPB0-6 = bits 8-14.
 // GPA7 and GPB7 are NOT used: on current MCP23017 silicon they are
 // output-only (Microchip datasheet rev. D+).
-#ifdef STICK_BLUE
-// Blue stick's wiring (build with -DSTICK_BLUE):
-const uint8_t MCP_BIT[PHYS_COUNT] = {
+// Two wirings, picked in Menu -> Wiring:
+//  Standard: the blue stick's wiring. Wire every new stick like this.
+//  Old red:  the original red stick, so it works without rewiring.
+enum Wiring : uint8_t { W_STANDARD, W_OLD_RED, W_COUNT };
+const char *WIRING_NAME[W_COUNT] = {"Standard", "Old red stick"};
+const uint8_t MCP_BIT_STD[PHYS_COUNT] = {
   3, 2, 0, 1,                 // Up = GPA3, Down = GPA2, Left = GPA0, Right = GPA1
   5, 6, 4,                    // Start = GPA5, Select = GPA6, Home = GPA4
   10, 9, 8, 13, 12, 11,       // B1 = GPB2, B2 = GPB1, B3 = GPB0, B4 = GPB5, B5 = GPB4, B6 = GPB3
   14                          // EX = GPB6 (the spare pin)
 };
-const char *PHYS_PIN[PHYS_COUNT] = {
+const char *PHYS_PIN_STD[PHYS_COUNT] = {
   "GPA3", "GPA2", "GPA0", "GPA1", "GPA5", "GPA6", "GPA4",
   "GPB2", "GPB1", "GPB0", "GPB5", "GPB4", "GPB3", "GPB6"
 };
-#else
-// Red stick's wiring (default build):
-const uint8_t MCP_BIT[PHYS_COUNT] = {
+const uint8_t MCP_BIT_RED[PHYS_COUNT] = {
   0, 1, 2, 3,                 // GPA0..GPA3 : Up Down Left Right
   5, 6, 4,                    // Start = GPA5, Select = GPA6, Home = GPA4
   9, 11, 8, 14, 12, 13,       // B1 = GPB1, B2 = GPB3, B3 = GPB0, B4 = GPB6, B5 = GPB4, B6 = GPB5
   10                          // EX = GPB2 (the spare pin)
 };
-const char *PHYS_PIN[PHYS_COUNT] = {
+const char *PHYS_PIN_RED[PHYS_COUNT] = {
   "GPA0", "GPA1", "GPA2", "GPA3", "GPA5", "GPA6", "GPA4",
   "GPB1", "GPB3", "GPB0", "GPB6", "GPB4", "GPB5", "GPB2"
 };
-#endif
+// START, SELECT and HOME are on the same pins in both wirings
+const uint8_t *MCP_BIT = MCP_BIT_STD;
+const char **PHYS_PIN = PHYS_PIN_STD;
+
+// This stick's identity, kept on the stick (not in the settings file)
+uint8_t stickWiring = W_STANDARD, stickColour = 0, bootColour = 0;
+String deviceName() { return String("Arcade Stick ") + COLOUR_NAME[stickColour]; }
+void applyWiring() {
+  MCP_BIT = stickWiring == W_OLD_RED ? MCP_BIT_RED : MCP_BIT_STD;
+  PHYS_PIN = stickWiring == W_OLD_RED ? PHYS_PIN_RED : PHYS_PIN_STD;
+}
+void saveIdentity() {
+  Preferences n; n.begin("stick", false);
+  n.putUChar("wiring", stickWiring); n.putUChar("colour", stickColour); n.end();
+}
 const char *PHYS_NAME[PHYS_COUNT] = {
   "Up", "Down", "Left", "Right", "Start", "Select", "Home",
   "B1 top-L", "B2 top-M", "B3 top-R", "B4 bot-L", "B5 bot-M", "B6 bot-R", "EX extra"
@@ -194,9 +205,6 @@ const char *AUTOOFF_NAME[] = {"Off", "10 min", "20 min", "30 min"};
 #define AUTOOFF_COUNT 4
 const char *SOCD_NAME[] = {"Cancel out", "Last wins"};
 #define SOCD_COUNT 2
-#define THEME_COUNT 6
-const char *THEME_NAME[THEME_COUNT] = {"Stick colour", "Amber", "Red", "Blue", "Green", "Purple"};
-const uint16_t THEME_COL[THEME_COUNT] = {STICK_ACCENT, 0xFD20, 0xE145, 0x2B7F, 0x3E4B, 0xAA9C};
 enum Page : uint8_t { PG_BUTTONS, PG_INPUTS, PG_MOVES, PAGE_COUNT };
 const char *PAGE_NAME[PAGE_COUNT] = {"Buttons", "Inputs", "Moves"};
 
@@ -217,7 +225,7 @@ struct Settings {
   uint8_t autoOff = 2;       // index into AUTOOFF_MIN
   uint8_t socd = 0;          // Left + Right together: 0 cancel out, 1 last wins
   uint8_t player = DEFAULT_PLAYER;
-  uint8_t theme = 0;         // 0 = stick colour
+  uint8_t theme = 0;         // unused since v2.4 (the colour is part of the stick's identity)
   uint8_t page = 0;          // status screen page
   uint8_t game = 0;          // move list game
   uint8_t fighter = 0;       // move list character
@@ -250,7 +258,6 @@ void loadSettings() {
   if (cfg.autoOff >= AUTOOFF_COUNT) cfg.autoOff = 2;
   if (cfg.socd >= SOCD_COUNT) cfg.socd = 0;
   if (cfg.player > 3) cfg.player = DEFAULT_PLAYER;
-  if (cfg.theme >= THEME_COUNT) cfg.theme = 0;
   if (cfg.page >= PAGE_COUNT) cfg.page = 0;
   if (cfg.game >= GAME_COUNT) cfg.game = 0;
   if (cfg.fighter >= GAMES[cfg.game].n) cfg.fighter = 0;
@@ -317,7 +324,7 @@ bool haveCanvas = false;
 // ======================= GAMEPAD OUTPUT =============================
 USBHIDGamepad usbPad;
 USBCDC debugSerial;          // serial monitor + lets the IDE auto-reset for upload
-BleGamepad blePad(DEVICE_NAME, "DIY", 100);
+BleGamepad *blePad = nullptr;        // made in setup(): its Bluetooth name comes from the colour
 volatile bool usbMounted = false;
 volatile bool radioOff = false;      // Bluetooth shut down (Wi-Fi update mode)
 
@@ -388,7 +395,7 @@ void usbEvent(void *, esp_event_base_t base, int32_t id, void *) {
 
 bool hostConnected() {
   if (bootConn == C_BLE && radioOff) return false;
-  return bootConn == C_USB ? usbMounted : blePad.isConnected();
+  return bootConn == C_USB ? usbMounted : blePad->isConnected();
 }
 
 // ======================= MCP23017 ===================================
@@ -594,15 +601,15 @@ void sendReport(const Report &r) {
       lastSent = r; forceSend = false;
     }
   } else {
-    if (radioOff || !blePad.isConnected()) return;
+    if (radioOff || !blePad->isConnected()) return;
     for (uint8_t b = 0; b < 15; b++) {
       bool want = r.buttons & (1UL << b), had = lastSent.buttons & (1UL << b);
-      if (want != had || forceSend) { if (want) blePad.press(b + 1); else blePad.release(b + 1); }
+      if (want != had || forceSend) { if (want) blePad->press(b + 1); else blePad->release(b + 1); }
     }
-    blePad.setHat1(r.hat);
+    blePad->setHat1(r.hat);
     // setAxes(x, y, z, rX, rY, rZ, slider1, slider2); only X, Y, Z, RZ are enabled
-    blePad.setAxes(r.lx * 258, r.ly * 258, r.rx * 258, 0, 0, r.ry * 258, 0, 0);
-    blePad.sendReport();
+    blePad->setAxes(r.lx * 258, r.ly * 258, r.rx * 258, 0, 0, r.ry * 258, 0, 0);
+    blePad->sendReport();
     lastSent = r; forceSend = false;
   }
 }
@@ -884,11 +891,11 @@ const char *messageText = "";
 uint32_t messageUntil = 0;
 
 enum MenuItem { M_PROFILE, M_REMAP, M_TURBO, M_STICK, M_GAME, M_FIGHTER, M_MOVECHECK, M_CONN, M_FORGET, M_BRIGHT, M_SLEEP, M_AUTOOFF,
-                M_SOUND, M_CLICKS, M_THEME, M_PLAYER, M_SOCD, M_FLIP, M_TEST, M_ONLINE, M_UPDATE, M_WIFI, M_EXIT, M_COUNT };
+                M_SOUND, M_CLICKS, M_COLOUR, M_PLAYER, M_SOCD, M_FLIP, M_WIRING, M_TEST, M_ONLINE, M_UPDATE, M_WIFI, M_EXIT, M_COUNT };
 const char *MENU_LABEL[M_COUNT] = {
   "Profile", "Remap buttons", "Turbo", "Stick", "Game", "Fighter", "Move check", "Connection",
   "Forget BT pairings", "Brightness", "Screen sleep", "Auto power off", "Sound", "Button clicks",
-  "Colour", "Player", "Left + Right", "Flip screen", "Input test", "Check for update", "USB update", "Wi-Fi update", "Save & exit"
+  "Colour", "Player", "Left + Right", "Flip screen", "Wiring", "Input test", "Check for update", "USB update", "Wi-Fi update", "Save & exit"
 };
 
 // colours (RGB565)
@@ -897,7 +904,7 @@ static constexpr uint16_t C_PANEL = 0x18E3;
 static constexpr uint16_t C_LINE = 0x4A69;
 static constexpr uint16_t C_TEXT = 0xFFFF;
 static constexpr uint16_t C_DIM = 0x9CF3;
-uint16_t C_ACCENT = STICK_ACCENT;                // set from the Colour setting
+uint16_t C_ACCENT = 0x2B7F;                      // set from the stick colour
 static constexpr uint16_t C_TURBO = 0x07FF;   // cyan
 static constexpr uint16_t C_OK = 0x47E8;   // green
 static constexpr uint16_t C_BLUE = 0x3C9F;
@@ -911,7 +918,7 @@ Pt btnPos(uint8_t i) {
   return {(int16_t)(150 + (mm[i][0] - 59) * 1.6f), (int16_t)(112 - mm[i][1] * 1.6f)};
 }
 
-void applyTheme() { C_ACCENT = THEME_COL[cfg.theme]; }
+void applyTheme() { C_ACCENT = COLOUR_RGB[stickColour]; }
 
 // Toast: short message over the status screen (profile / page / fighter changes)
 const char *toastText = nullptr;
@@ -1213,7 +1220,7 @@ void drawShortcutHelp(LGFX_Sprite &g) {
 
 void drawStatus(LGFX_Sprite &g) {
   uint16_t s = physState;
-  drawHeader(g, DEVICE_NAME);
+  drawHeader(g, deviceName().c_str());
   switch (cfg.page) {
     case PG_INPUTS: drawPageInputs(g); break;
     case PG_MOVES:  drawPageMoves(g); break;
@@ -1270,7 +1277,7 @@ void drawAttract(LGFX_Sprite &g) {
   g.drawString("ARCADE STICK", 160, 80 + bob);
   g.setFont(&fonts::FreeSansBold9pt7b);
   g.setTextColor(C_TEXT);
-  char buf[32]; snprintf(buf, sizeof buf, "%s  -  PLAYER %d", STICK_COLOUR_NAME, cfg.player + 1);
+  char buf[32]; snprintf(buf, sizeof buf, "%s  -  PLAYER %d", COLOUR_NAME[stickColour], cfg.player + 1);
   g.drawString(buf, 160, 120);
   if ((t / 600) & 1) {
     g.setFont(&fonts::FreeSansBold12pt7b);
@@ -1297,7 +1304,8 @@ void menuValue(int item, char *buf, size_t n) {
     case M_CLICKS:  snprintf(buf, n, "< %s >", cfg.clicks ? "On" : "Off"); break;
     case M_SLEEP:   snprintf(buf, n, "< %s >", SLEEP_NAME[cfg.screenSleep]); break;
     case M_AUTOOFF: snprintf(buf, n, "< %s >", AUTOOFF_NAME[cfg.autoOff]); break;
-    case M_THEME:   snprintf(buf, n, "< %s >", THEME_NAME[cfg.theme]); break;
+    case M_COLOUR:  snprintf(buf, n, "< %s >", COLOUR_NAME[stickColour]); break;
+    case M_WIRING:  snprintf(buf, n, "< %s >", WIRING_NAME[stickWiring]); break;
     case M_PLAYER:  snprintf(buf, n, "< P%d >", cfg.player + 1); break;
     case M_SOCD:    snprintf(buf, n, "< %s >", SOCD_NAME[cfg.socd]); break;
     case M_GAME:    snprintf(buf, n, "< %s >", GAMES[cfg.game].name); break;
@@ -1512,15 +1520,15 @@ String htmlEsc(const String &in) {
   }
   return o;
 }
-String apName() { return String("ArcadeStick-") + STICK_COLOUR_NAME; }
+String apName() { return String("ArcadeStick-") + COLOUR_NAME[stickColour]; }
 
-// The other stick's firmware has the other pin map: refuse it.
-// Each build carries its own ID tag; an upload must contain this stick's tag.
-#ifdef STICK_BLUE
-__attribute__((used)) static const char STICK_ID[] = "ASID:BLUE";
-#else
-__attribute__((used)) static const char STICK_ID[] = "ASID:RED!";
-#endif
+// Uploads must be Arcade Stick firmware: v2.4+ builds carry this tag.
+// The old per-stick tags are kept in the image too, so sticks still on v2.3
+// (which look for "their" tag) accept this firmware. They're also what the
+// first boot looks for to recognise the old red stick (see loadIdentity).
+__attribute__((used)) static const char STICK_ID[] = "ASID:STK1";
+__attribute__((used)) static const char OLD_ID_RED[] = "ASID:RED!";
+__attribute__((used)) static const char OLD_ID_BLUE[] = "ASID:BLUE";
 uint8_t markPos = 0; bool markSeen = false;
 void scanForMark(const uint8_t *b, size_t n) {
   for (size_t i = 0; i < n && !markSeen; i++) {
@@ -1535,21 +1543,21 @@ static const char WEB_PAGE[] PROGMEM = R"HTML(<!doctype html><html><head><meta c
 h1{font-size:22px;margin:0 0 4px}p{color:#9aa4b2;margin:4px 0 14px}section{background:#1a2030;border-radius:10px;padding:16px;margin:14px 0}
 h2{font-size:16px;margin:0 0 10px;color:%HEX%}button,a.b{background:%HEX%;color:#10141c;border:0;border-radius:8px;padding:10px 14px;font-weight:600;text-decoration:none;display:inline-block;margin-top:8px}
 input{color:#e8ecf1;margin:6px 0}input[type=text],input[type=password]{background:#10141c;border:1px solid #3a4456;border-radius:6px;padding:9px;width:100%;box-sizing:border-box;font-size:15px}#s{color:%HEX%;font-weight:600}</style></head><body>
-<h1>%NAME%</h1><p>Firmware v%VER% &middot; %COLOUR% stick</p>
-<section><h2>Update firmware</h2><p>Choose the <b>%COLOURL%</b> stick's <b>_wifi.bin</b> file.</p>
+<h1>%NAME%</h1><p>Firmware v%VER%</p>
+<section><h2>Update firmware</h2><p>Choose the <b>_wifi.bin</b> file (the same file works on every stick).</p>
 <form id="f" method="POST" action="/update" enctype="multipart/form-data"><input type="file" name="fw" accept=".bin"><br>
 <button>Install</button></form><p id="s"></p></section>
 <section><h2>Home Wi-Fi (for Check for update)</h2><p>%HWSTATUS%</p>
 <form method="POST" action="/homewifi"><input type="text" name="ssid" list="nets" placeholder="Wi-Fi name" value="%HWSSID%" autocomplete="off">
 <datalist id="nets">%NETS%</datalist><input type="password" name="pass" placeholder="Wi-Fi password"><br>
 <button>Save home Wi-Fi</button></form></section>
-<section><h2>Copy settings to the other stick</h2><p>Profiles, remaps, turbo, sound and screen settings.</p>
+<section><h2>Copy settings to another stick</h2><p>Profiles, remaps, turbo, sound and screen settings.</p>
 <a class="b" href="/settings.bin">Download settings</a>
 <form method="POST" action="/settings" enctype="multipart/form-data"><input type="file" name="cfg" accept=".bin"><br>
 <button>Load settings file</button></form></section>
 <script>
 document.getElementById('f').onsubmit=function(e){var i=this.fw.files[0];if(!i){e.preventDefault();return}
-var n=i.name.toLowerCase();if(n.indexOf('%COLOURL%')<0||n.indexOf('wifi')<0){if(!confirm(i.name+' does not look like the %COLOURL% stick Wi-Fi file. Install anyway?')){e.preventDefault();return}}
+var n=i.name.toLowerCase();if(n.indexOf('wifi')<0){if(!confirm(i.name+' does not look like the Wi-Fi firmware file. Install anyway?')){e.preventDefault();return}}
 document.getElementById('s').textContent='Uploading - keep this page open...'};
 </script></body></html>)HTML";
 
@@ -1587,8 +1595,8 @@ void wifiStart() {
     String p = FPSTR(WEB_PAGE);
     char hex[8]; uint16_t c = C_ACCENT;
     snprintf(hex, sizeof hex, "#%02x%02x%02x", (c >> 8) & 0xF8, (c >> 3) & 0xFC, (c << 3) & 0xF8);
-    String col = STICK_COLOUR_NAME, coll = col; coll.toLowerCase();
-    p.replace("%NAME%", DEVICE_NAME); p.replace("%VER%", FW_VERSION);
+    String col = COLOUR_NAME[stickColour], coll = col; coll.toLowerCase();
+    p.replace("%NAME%", deviceName()); p.replace("%VER%", FW_VERSION);
     p.replace("%COLOURL%", coll); p.replace("%COLOUR%", col); p.replace("%HEX%", hex);
     String ss = homeSsid();
     p.replace("%HWSTATUS%", ss.length() ? "Saved: <b>" + htmlEsc(ss) + "</b>. The stick uses it only to check GitHub for updates."
@@ -1623,7 +1631,7 @@ void wifiStart() {
       if ((otaBytes >> 16) != (before >> 16)) render();      // progress every 64 KB
     } else if (up.status == UPLOAD_FILE_END && wifiState == 2) {
       bool rightStick = markSeen;
-      if (!rightStick) { Update.abort(); wifiState = 4; wifiError = "That firmware is for the other stick (its buttons are wired differently)."; }
+      if (!rightStick) { Update.abort(); wifiState = 4; wifiError = "That isn't Arcade Stick firmware v2.4 or later."; }
       else if (Update.end(true)) wifiState = 3;
       else { wifiState = 4; wifiError = "The file was incomplete or damaged."; }
       render();
@@ -1652,11 +1660,11 @@ void wifiStart() {
       } else {
         Settings in = cfg;                               // fields missing from older files keep their value
         memcpy(&in, &f->s, f->size);
-        in.player = cfg.player; in.theme = cfg.theme;    // keep this stick's own player and colour
+        in.player = cfg.player;                          // keep this stick's own player (colour and wiring aren't in the file)
         in.conn = cfg.conn;
         cfg = in;
         saveSettings(); applyTheme(); applySoundSettings();
-        smsg = "Loaded and saved. This stick keeps its own player number and colour.";
+        smsg = "Loaded and saved. This stick keeps its own player number, colour and wiring.";
       }
     }
   });
@@ -1781,13 +1789,17 @@ void onlineTask(void *) {
   }
   String tag;
   if (jsonStr(body, "tag_name", 0, tag) < 0 || !tag.length()) { olFail("Couldn't read the release info."); vTaskDelete(nullptr); }
-  String want = String("_") + STICK_COLOUR_NAME + "_wifi.bin"; want.toLowerCase();
+  // every stick runs the same file: prefer ArcadeStick_vX.Y_wifi.bin, but the
+  // _red_/_blue_ copies (kept for sticks still on v2.3) are identical
   olUrl = "";
   for (int pos = 0; pos >= 0; ) {
     String u; pos = jsonStr(body, "browser_download_url", pos, u);
     if (pos < 0) break;
     String lu = u; lu.toLowerCase();
-    if (lu.endsWith(want)) { olUrl = u; break; }
+    if (!lu.endsWith("_wifi.bin")) continue;
+    bool legacy = lu.endsWith("_red_wifi.bin") || lu.endsWith("_blue_wifi.bin");
+    if (!olUrl.length() || !legacy) olUrl = u;
+    if (!legacy) break;
   }
   body = String();                                   // free it before downloading
   olLatest = tag;
@@ -1837,7 +1849,7 @@ void onlineTask(void *) {
       if ((olBytes >> 15) != (before >> 15)) uiDirty = true;
     }
     http.end();
-    if (!err && !markSeen) err = "That file is for the other stick.";
+    if (!err && !markSeen) err = "That file isn't Arcade Stick\nfirmware v2.4 or later.";
     if (err) { Update.abort(); olFail(err); vTaskDelete(nullptr); }
     if (!Update.end(true)) { olFail("The download was damaged.\nTry again."); vTaskDelete(nullptr); }
   }
@@ -1946,7 +1958,7 @@ void openMenu() {
 
 void closeMenu() {
   playSound(SND_SAVED);
-  if (cfg.conn != bootConn) {
+  if (cfg.conn != bootConn || stickColour != bootColour) {   // new connection or new name: restart to apply
     saveSettings();
     showMessage("Restarting...", 0);
     delay(800);
@@ -1983,7 +1995,8 @@ void menuChange(int dir) {
     case M_CLICKS:  cycle(cfg.clicks, dir, 2); break;
     case M_SLEEP:   cycle(cfg.screenSleep, dir, SLEEP_COUNT); break;
     case M_AUTOOFF: cycle(cfg.autoOff, dir, AUTOOFF_COUNT); break;
-    case M_THEME:   cycle(cfg.theme, dir, THEME_COUNT); applyTheme(); break;
+    case M_COLOUR:  stickColour = (stickColour + dir + COLOUR_COUNT) % COLOUR_COUNT; applyTheme(); saveIdentity(); break;
+    case M_WIRING:  stickWiring = (stickWiring + dir + W_COUNT) % W_COUNT; applyWiring(); saveIdentity(); break;
     case M_PLAYER:  cycle(cfg.player, dir, 4); break;
     case M_SOCD:    cycle(cfg.socd, dir, SOCD_COUNT); break;
     case M_GAME:    cycle(cfg.game, dir, GAME_COUNT); cfg.fighter = 0; resetMoves(); break;
@@ -2276,7 +2289,7 @@ void uiTask(void *) {
     if (bootConn == C_BLE && !radioOff && now - lastBatt > 30000) {
       lastBatt = now;
       int p = batteryPercent();
-      if (p >= 0 && p != lastBattPct) { blePad.setBatteryLevel(p); lastBattPct = p; }
+      if (p >= 0 && p != lastBattPct) { blePad->setBatteryLevel(p); lastBattPct = p; }
     }
 
     // shortcut changes are saved a few seconds later (not on every press)
@@ -2301,14 +2314,63 @@ void uiTask(void *) {
   }
 }
 
+// ======================= STICK IDENTITY =============================
+// Colour and wiring live in their own storage ("stick"), so they survive
+// settings copies. The very first time v2.4+ starts there's nothing saved yet:
+// it then looks at the firmware it replaced (still in the other app slot).
+// An old red-only build means this is the original red stick, so it keeps its
+// wiring and colour without any setup; an old blue build means blue. Anything
+// else (a brand-new stick) gets Standard wiring and Blue.
+enum OldBuild : uint8_t { OB_NONE, OB_RED, OB_BLUE };
+OldBuild scanOldFirmware() {
+  const esp_partition_t *other = esp_ota_get_next_update_partition(nullptr);
+  if (!other) return OB_NONE;
+  const char *pat[3] = {OLD_ID_RED, OLD_ID_BLUE, STICK_ID};
+  uint8_t pos[3] = {0, 0, 0}; bool seen[3] = {false, false, false};
+  static uint8_t buf[4096];
+  uint32_t len = min<uint32_t>(other->size, 0x280000);      // images are under 2 MB
+  for (uint32_t off = 0; off < len; off += sizeof buf) {
+    if (esp_partition_read(other, off, buf, sizeof buf) != ESP_OK) return OB_NONE;
+    if (off == 0 && buf[0] != 0xE9) return OB_NONE;           // empty slot
+    for (size_t i = 0; i < sizeof buf; i++)
+      for (int k = 0; k < 3; k++) {
+        if (buf[i] == (uint8_t)pat[k][pos[k]]) { if (++pos[k] == 9) { seen[k] = true; pos[k] = 0; } }
+        else pos[k] = (buf[i] == (uint8_t)pat[k][0]) ? 1 : 0;
+      }
+  }
+  if (seen[2]) return OB_NONE;                                 // already a v2.4+ build
+  if (seen[0] && !seen[1]) return OB_RED;
+  if (seen[1] && !seen[0]) return OB_BLUE;
+  return OB_NONE;
+}
+
+void loadIdentity() {
+  Preferences n; n.begin("stick", true);
+  bool have = n.isKey("wiring");
+  if (have) { stickWiring = n.getUChar("wiring", W_STANDARD); stickColour = n.getUChar("colour", 0); }
+  n.end();
+  if (!have) {
+    OldBuild ob = scanOldFirmware();
+    stickWiring = ob == OB_RED ? W_OLD_RED : W_STANDARD;
+    stickColour = ob == OB_RED ? 1 : 0;                        // Red : Blue
+    saveIdentity();
+  }
+  if (stickWiring >= W_COUNT) stickWiring = W_STANDARD;
+  if (stickColour >= COLOUR_COUNT) stickColour = 0;
+}
+
 // ======================= SETUP / LOOP ===============================
 void setup() {
   loadSettings();
+  loadIdentity();
+  applyWiring();
   applyTheme();
   bootConn = cfg.conn;
+  bootColour = stickColour;
+  blePad = new BleGamepad(deviceName().c_str(), "DIY", 100);
 
   // USB: CDC serial always (debug + upload); HID gamepad only in USB mode
-  USB.productName(DEVICE_NAME);
+  USB.productName(deviceName().c_str());
   USB.manufacturerName("DIY");
   USB.onEvent(usbEvent);
   debugSerial.begin(115200);
@@ -2324,7 +2386,7 @@ void setup() {
     bc.setWhichAxes(true, true, true, false, false, true, false, false);  // X Y Z RZ
     bc.setAxesMin(-32767);
     bc.setAxesMax(32767);
-    blePad.begin(&bc);
+    blePad->begin(&bc);
   }
 
   // display

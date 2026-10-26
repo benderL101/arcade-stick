@@ -1,4 +1,4 @@
-# Arcade Stick Firmware v2.3
+# Arcade Stick Firmware v2.4
 
 Firmware for the DIY arcade stick: Freenove ESP32-S3 2.8" display (FNK0104) + MCP23017 expander.
 
@@ -35,32 +35,48 @@ On the MCP23017 module:
 
 Every switch has two terminals. One goes to its MCP pin; the other goes to the **shared ground** (daisy-chain wire → MCP GND).
 
-There are two builds, one for each stick, because they're wired differently:
+Every stick runs the **same firmware**. Wire new sticks to the **standard wiring** below (the blue stick's layout). The original red stick is wired differently: **Menu → Wiring → Old red stick** handles it, so it never needs rewiring.
 
-- **Red stick:** `ArcadeStick_v2.3_red_usb.bin`. The table below shows its wiring.
-- **Blue stick:** `ArcadeStick_v2.3_blue_usb.bin`. It shows up as **"Arcade Stick Blue"** on screen, over USB and in Bluetooth pairing, so the two are easy to tell apart.
-
-To build the blue version yourself: in the Arduino IDE, add `#define STICK_BLUE` as the first line of `firmware.cpp`. In PlatformIO, run `pio run -e arcade_stick_blue`. Each stick's pin map is in `MCP_BIT` near the top of the code.
-
-**Red stick wiring:**
+**Standard wiring:**
 
 | MCP pin | Connect to | Notes |
 |---|---|---|
-| GPA0 | Stick **Up** | |
-| GPA1 | Stick **Down** | |
-| GPA2 | Stick **Left** | |
-| GPA3 | Stick **Right** | |
+| GPA0 | Stick **Left** | |
+| GPA1 | Stick **Right** | |
+| GPA2 | Stick **Down** | |
+| GPA3 | Stick **Up** | |
 | GPA4 | **Home** (24 mm) | tap = Home, hold 1 s = menu |
 | GPA5 | **Start** (24 mm) | |
 | GPA6 | **Select** (24 mm) | |
 | GPB0 | **B3**: top row, right | |
-| GPB1 | **B1**: top row, left | |
-| GPB2 | **EX**: optional 7th button | leave empty if unused |
-| GPB3 | **B2**: top row, middle | |
+| GPB1 | **B2**: top row, middle | |
+| GPB2 | **B1**: top row, left | |
+| GPB3 | **B6**: bottom row, right | |
 | GPB4 | **B5**: bottom row, middle | also "back" in menus |
-| GPB5 | **B6**: bottom row, right | |
-| GPB6 | **B4**: bottom row, left | also "select" in menus |
+| GPB5 | **B4**: bottom row, left | also "select" in menus |
+| GPB6 | **EX**: optional 7th button | leave empty if unused |
 | GND | Ground daisy-chain + stick harness black wire | |
+
+The directions are where the stick is **pushed**, as the player sees it. Check them in **Menu → Input test**.
+
+<details><summary>Old red stick wiring (for reference)</summary>
+
+| MCP pin | Connect to |
+|---|---|
+| GPA0 / GPA1 / GPA2 / GPA3 | Up / Down / Left / Right |
+| GPA4 / GPA5 / GPA6 | Home / Start / Select |
+| GPB0 / GPB1 / GPB3 | B3 / B1 / B2 |
+| GPB4 / GPB5 / GPB6 | B5 / B6 / B4 |
+| GPB2 | EX |
+
+</details>
+
+### Setting up a new stick
+
+1. Wire it to the standard wiring and flash `ArcadeStick_v2.4_usb.bin` (see Flashing below).
+2. **Menu → Colour**: pick its colour (Blue, Red, Green, Yellow, Orange, Purple, Pink or White). The colour sets the screen accent, the name ("**Arcade Stick Green**") in Bluetooth pairing and over USB, and its Wi-Fi name. The stick restarts when you leave the menu so the new name takes effect.
+3. **Menu → Player**: set P1, P2, P3 or P4.
+4. Pair it with the handheld.
 
 **Joystick tip:** a stick's switches sit opposite the direction you push, so its harness colours don't always match. After wiring, open **Menu → Input test** and push each direction. If one shows the wrong name, swap those two wires.
 
@@ -72,10 +88,10 @@ To build the blue version yourself: in the Arduino IDE, add `#define STICK_BLUE`
 
 | File | Use it for |
 |---|---|
-| `ArcadeStick_v2.3_red_usb.bin` / `..._blue_usb.bin` | Flashing over the USB cable (address 0x0) |
-| `ArcadeStick_v2.3_red_wifi.bin` / `..._blue_wifi.bin` | **Menu → Wi-Fi update** (no cable) |
+| `ArcadeStick_v2.4_usb.bin` | Flashing over the USB cable (address 0x0) |
+| `ArcadeStick_v2.4_wifi.bin` | **Menu → Wi-Fi update** (no cable) |
 
-Each stick only accepts its own colour's Wi-Fi file, because the two are wired differently.
+The same files work on every stick. (Releases also carry `_red_wifi.bin` and `_blue_wifi.bin` copies of the Wi-Fi file, only so sticks still on v2.3 can find the update.)
 
 ### Check for update (v2.3 and later): the easy way
 
@@ -83,7 +99,7 @@ The sticks look for new firmware on GitHub (github.com/benderL101/arcade-stick) 
 
 **One-off setup:** save your home Wi-Fi on each stick.
 1. **Menu → Wi-Fi update**, press **B4**.
-2. On your phone, join **ArcadeStick-Red** (or **-Blue**). The password is **arcadestick**.
+2. On your phone, join **ArcadeStick-** plus the stick's colour, e.g. **ArcadeStick-Blue**. The password is **arcadestick**.
 3. Open **http://192.168.4.1**. Under **Home Wi-Fi**, pick your network, type its password and press **Save home Wi-Fi**.
 4. Press **HOME** on the stick (it restarts).
 
@@ -92,18 +108,18 @@ The Wi-Fi password is stored on the stick only. It isn't in the settings file an
 **Updating from then on:**
 1. **Menu → Check for update**, press **B4**. Bluetooth turns off and the stick checks GitHub.
 2. It shows **Up to date**, or **v2.x available**. Press **B4** to install it, or **HOME** to cancel.
-3. It downloads its own colour's file, checks it, installs it and restarts. Your settings are kept.
+3. It downloads the file, checks it, installs it and restarts. Your settings are kept.
 
 If anything goes wrong (Wi-Fi, internet, a bad download), the old firmware stays in place and the stick just restarts into it.
 
 ### Updating over Wi-Fi from a phone (v2.0 and later)
 
 1. **Menu → Wi-Fi update**, press **B4**. Bluetooth switches off and the stick makes its own Wi-Fi network.
-2. On a phone or computer, join **ArcadeStick-Red** (or **-Blue**). The password is **arcadestick**.
+2. On a phone or computer, join **ArcadeStick-** plus the stick's colour, e.g. **ArcadeStick-Blue**. The password is **arcadestick**.
 3. Open **http://192.168.4.1**, choose the stick's `_wifi.bin` file and press **Install**. The stick restarts with the new firmware.
 4. Press **HOME** to leave without updating (the stick restarts).
 
-The same page has **Download settings** and **Load settings file**: download from one stick, then load the file on the other to copy profiles, remaps, turbo, sound and screen settings. Each stick keeps its own player number and colour.
+The same page has **Download settings** and **Load settings file**: download from one stick, then load the file on the other to copy profiles, remaps, turbo, sound and screen settings. Each stick keeps its own player number, colour and wiring.
 
 ### Updating over USB without opening the case (v1.6 and later)
 
@@ -121,7 +137,7 @@ Once v1.6 is on the stick, you never need the BOOT button again:
 1. In **Chrome or Edge** on a computer, open **https://espressif.github.io/esptool-js/**.
 2. Plug in the Freenove board. Hold **BOOT**, tap **RESET**, then release BOOT.
 3. Click **Connect** and pick the board's port.
-4. Set Flash Address **0x0**, choose `ArcadeStick_v2.3_red_usb.bin`, then click **Program**.
+4. Set Flash Address **0x0**, choose `ArcadeStick_v2.4_usb.bin`, then click **Program**.
 5. When it finishes, tap **RESET**.
 
 ### Option B: Arduino IDE (to edit the code)
@@ -305,9 +321,10 @@ Stick up/down moves, stick left/right changes a value, **B4** selects, **HOME** 
 | Auto power off | Off / 10 / 20 / 30 min idle when not connected |
 | Sound | Off, Low, Medium or High. Changing it plays a sample at the new level. |
 | Button clicks | A short click on every button press during play. Off by default. |
-| Colour | Accent colour for the screen: Stick colour (red or blue), Amber, Red, Blue, Green, Purple |
+| Colour | The stick's colour: Blue, Red, Green, Yellow, Orange, Purple, Pink or White. Sets the screen accent and the name in Bluetooth, USB and Wi-Fi ("Arcade Stick Green"). The stick restarts when you leave the menu if it changed. |
 | Player | P1 to P4, shown on the screen. The host decides the real player order: connect P1 first. |
 | Left + Right | What happens if left and right are pressed together: Cancel out or Last wins. A lever can't do this, so it only matters on a leverless build. |
+| Wiring | **Standard** for every stick wired to the table in section 1; **Old red stick** for the original red stick. Takes effect straight away. |
 | Flip screen | Rotates 180° if the screen is mounted the other way round |
 | Input test | Shows every input and its MCP pin. **Hold HOME for 2 s** to leave. |
 | Check for update | Checks GitHub for newer firmware over your home Wi-Fi and installs it if you say so. |
@@ -317,7 +334,7 @@ Stick up/down moves, stick left/right changes a value, **B4** selects, **HOME** 
 The profiles use standard Android gamepad buttons, so RetroArch picks them up without any manual binding. The Mega Drive profile matches Genesis Plus GX's default 6-button layout.
 
 ### Bluetooth pairing
-Set Connection to Bluetooth, then on the handheld open Bluetooth settings and pair with **"Arcade Stick"**.
+Set Connection to Bluetooth, then on the handheld open Bluetooth settings and pair with **"Arcade Stick"** plus its colour, e.g. **"Arcade Stick Blue"**.
 
 ---
 

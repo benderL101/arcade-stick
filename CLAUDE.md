@@ -1,6 +1,6 @@
 # CLAUDE.md: Arcade Stick firmware
 
-Firmware for Ben's two DIY Bluetooth arcade sticks, one **red** and one **blue**. One codebase builds both. They differ only in pin map, name and accent colour.
+Firmware for Ben's DIY Bluetooth arcade sticks (a blue one, a red one, and more to come). **One firmware runs on every stick.** Each stick's colour (which sets its accent, its Bluetooth/USB name "Arcade Stick <Colour>" and its Wi-Fi name) and its wiring are picked in the stick's own menu and stored on the stick.
 
 ## Who uses this and how
 
@@ -22,14 +22,23 @@ Firmware for Ben's two DIY Bluetooth arcade sticks, one **red** and one **blue**
 | Other | WS2812 on GPIO 42. Battery ADC on GPIO 9 (voltage ÷ 2, 1S LiPo). Backlight on GPIO 45. |
 | Controls | Sanwa JLF stick, 6 × 30 mm buttons (B1–B3 top row, B4–B6 bottom row), and 3 × 24 mm buttons (START, SELECT, HOME). EX is an optional 7th. |
 
-Pin maps are in `MCP_BIT[]` in `src/main.cpp`. The blue map sits under `#ifdef STICK_BLUE`. Both reflect how each stick is **actually wired**, so never "tidy" them.
+Pin maps are in `src/main.cpp`:
+- `MCP_BIT_STD[]`: the **standard wiring** (the blue stick's). Every new stick is wired to this.
+- `MCP_BIT_RED[]`: the original red stick, picked with **Menu → Wiring → Old red stick**.
+
+Both reflect how real sticks are **actually wired**, so never "tidy" them. START, SELECT and HOME are on the same pins in both, so the menu always opens. `MCP_BIT` / `PHYS_PIN` are pointers set by `applyWiring()`.
+
+### Stick identity
+- Stored in NVS namespace `stick` (keys `wiring`, `colour`), **not** in `Settings`, so settings copies never carry it.
+- `COLOUR_NAME[]` / `COLOUR_RGB[]`: index 0 Blue (default), 1 Red, then Green, Yellow, Orange, Purple, Pink, White. Only append to this list, so saved indexes keep their meaning.
+- First boot of v2.4+ with no `stick` keys: `scanOldFirmware()` reads the other OTA slot (the firmware it replaced). An old build with only `ASID:RED!` → Old red wiring + Red. Only `ASID:BLUE` → Standard + Blue. Anything else → Standard + Blue.
+- `blePad` is created in `setup()` (a pointer), because its name comes from the colour. Changing colour restarts the stick when the menu closes.
 
 ## Build
 
 ```bash
-pio run -e arcade_stick        # red
-pio run -e arcade_stick_blue   # blue (-DSTICK_BLUE)
-tools/make_release.sh          # both, writes the four release files to release/
+pio run -e arcade_stick        # the one firmware
+tools/make_release.sh          # writes the four release files to release/
 g++ -std=c++17 -Wall -Isrc test/test_moves.cpp -o /tmp/tm && /tmp/tm   # move recogniser tests (must be ALL PASSED)
 ```
 
@@ -40,12 +49,12 @@ g++ -std=c++17 -Wall -Isrc test/test_moves.cpp -o /tmp/tm && /tmp/tm   # move re
 ## Releasing (how updates reach the sticks)
 
 1. Bump `FW_VERSION` in `src/main.cpp`, and the version in the header comment.
-2. Run `tools/make_release.sh` to build both sticks. Then run the tests.
-3. Check the stick tags. Each `.bin` must contain only its own tag: `grep -c 'ASID:RED!'` and `grep -c 'ASID:BLUE'` should give 1 for the right colour and 0 for the other.
+2. Run `tools/make_release.sh`. Then run the tests.
+3. Check the tags: every `.bin` must contain `ASID:STK1`, `ASID:RED!` and `ASID:BLUE` (`grep -c` gives 1 each). STK1 is what v2.4+ accepts; the two old tags let sticks still on v2.3 accept the update and let the first boot recognise the red stick.
 4. Commit and push to `main`.
 5. **Ben publishes the GitHub release himself.** Cloud Claude sessions can't create releases or upload release files: the API is blocked. So send him the four files and tell him to:
    - create a release tagged with the version (`v2.4` or `2.4` both work)
-   - attach all four files
+   - attach all four files: `_usb.bin`, `_wifi.bin`, and the identical `_red_wifi.bin` / `_blue_wifi.bin` copies (for sticks still on v2.3)
 6. Update `docs/MANUAL.md` for anything user-visible. It also ships as `README.md` in the zip package.
 
 ### Rules the on-stick updater depends on
@@ -54,16 +63,16 @@ g++ -std=c++17 -Wall -Isrc test/test_moves.cpp -o /tmp/tm && /tmp/tm   # move re
 - It joins the home Wi-Fi saved in NVS namespace `net`.
 - It GETs `api.github.com/repos/benderL101/arcade-stick/releases/latest`.
 - It compares the tag with `FW_VERSION` using `verNum()`, which skips non-digits.
-- It downloads the asset whose URL ends in `_red_wifi.bin` / `_blue_wifi.bin`. Matching is case-insensitive.
+- It downloads the asset whose URL ends in `_wifi.bin`, preferring one without `_red_`/`_blue_`. Matching is case-insensitive. (v2.3 sticks look for `_red_wifi.bin` / `_blue_wifi.bin`.)
 
 So:
-- **Asset names must keep the pattern** `ArcadeStick_vX.Y_<red|blue>_<usb|wifi>.bin`.
+- **Asset names must keep the pattern** `ArcadeStick_vX.Y_<usb|wifi>.bin`, plus the `_red_wifi` / `_blue_wifi` copies while any stick may still be on v2.3.
 - The tag must be a higher number than the installed version, or the stick reports "Up to date".
 - HTTPS is verified with the root CA bundle built into the core (`_binary_x509_crt_bundle_start`). Don't switch to `setInsecure()`.
 - Before installing, every Wi-Fi install (phone upload or GitHub) checks three things:
   - byte 0 is `0xE9`
   - the app descriptor magic `0xABCD5432` is at bytes 32–35, which rejects the USB merged bin
-  - the file contains this stick's ASID tag, which rejects the other stick's file
+  - the file contains `ASID:STK1`, i.e. it's Arcade Stick firmware v2.4 or later
 
   `Update.end(true)` then verifies the image checksum.
 - Keep the repo **public**. A private repo would need a token inside the firmware.
@@ -76,7 +85,7 @@ So:
   - The SELECT layer is `selLayer` plus `HOTKEYS[]`. SELECT is sent along with the hotkey target, and buttons used in the layer are suppressed until released.
   - RetroArch's Hotkey Enable is bound to SELECT.
 - **Settings:** `struct Settings` lives in Preferences. Its `version` field is 2. **Only ever append new fields at the end.** `loadSettings()` reads partial lengths, so updates keep old settings. Never reorder fields or change their sizes.
-  - The settings file has magic `ASTK`. Loading a file from the other stick keeps the local `player`, `theme` and `conn`.
+  - The settings file has magic `ASTK`. Loading a file from another stick keeps the local `player` and `conn`. `theme` is unused since v2.4.
 - **UI:**
   - `enum Screen` holds the screens.
   - `enum MenuItem` and `MENU_LABEL[]` must stay in the same order. Add an item to both lists, plus `menuValue()`, `menuSelect()` and the `S_MENU` right-press list.
@@ -90,7 +99,7 @@ So:
   - Auto power off when idle and not connected.
   - START held 5 s turns the stick off.
 - **Wi-Fi:**
-  - `wifiStart()`: phone access point `ArcadeStick-Red`/`-Blue`, password `arcadestick`, page at 192.168.4.1. The page handles OTA upload, settings copy and the home Wi-Fi form.
+  - `wifiStart()`: phone access point `ArcadeStick-<Colour>`, password `arcadestick`, page at 192.168.4.1. The page handles OTA upload, settings copy and the home Wi-Fi form.
   - `onlineStart()` / `onlineTask()`: the GitHub updater, running as its own 16 KB task.
 - **Bluetooth shutdown:** both Wi-Fi modes call `NimBLEDevice::deinit()` and set `radioOff`. **Any Bluetooth call must check `radioOff` first**, or the stick crashes. The stick restarts when you leave either Wi-Fi mode.
 - **USB flash mode without opening the case:** `usb_persist_restart(RESTART_BOOTLOADER)`, reached from Menu → USB update.
