@@ -37,3 +37,4 @@ The sticks compare the release tag with their own version. v2.4+ download the as
 | `test/test_moves.cpp` | Host tests for the move recogniser: `g++ -std=c++17 -Isrc test/test_moves.cpp && ./a.out` |
 | `platformio.ini` | Builds `arcade_stick` |
 | `tools/make_release.sh` | Builds the four release files |
+| `hardware/io-board/` | I/O board for building more sticks: JLCPCB files, parts list, soldering and wiring guide |

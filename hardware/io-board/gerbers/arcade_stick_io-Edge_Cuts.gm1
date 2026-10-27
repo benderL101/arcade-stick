@@ -1,0 +1,26 @@
+G04 #@! TF.GenerationSoftware,KiCad,Pcbnew,7.0.11+dfsg-1build4*
+G04 #@! TF.CreationDate,2026-10-27T09:15:59+00:00*
+G04 #@! TF.ProjectId,arcade_stick_io,61726361-6465-45f7-9374-69636b5f696f,rev?*
+G04 #@! TF.SameCoordinates,Original*
+G04 #@! TF.FileFunction,Profile,NP*
+%FSLAX46Y46*%
+G04 Gerber Fmt 4.6, Leading zero omitted, Abs format (unit mm)*
+G04 Created by KiCad (PCBNEW 7.0.11+dfsg-1build4) date 2026-10-27 09:15:59*
+%MOMM*%
+%LPD*%
+G01*
+G04 APERTURE LIST*
+G04 #@! TA.AperFunction,Profile*
+%ADD10C,0.100000*%
+G04 #@! TD*
+G04 APERTURE END LIST*
+D10*
+X0Y-47000000D02*
+X0Y2500000D01*
+X97000000Y-47000000D02*
+X0Y-47000000D01*
+X97000000Y2500000D02*
+X97000000Y-47000000D01*
+X0Y2500000D02*
+X97000000Y2500000D01*
+M02*
