@@ -22,9 +22,10 @@ The same files work on every stick. New sticks use the standard wiring in the ma
 
 ## Making a release
 
-1. Bump `FW_VERSION` in `src/main.cpp`, e.g. `"2.4"`.
-2. Run `tools/make_release.sh` to build into `release/`.
-3. Create a GitHub release tagged `v2.4`. Attach all four `.bin` files (`_usb`, `_wifi`, and the `_red_wifi` / `_blue_wifi` copies for sticks still on v2.3).
+1. Bump `FW_VERSION` in `src/main.cpp`, e.g. `"2.6"`, and push.
+2. Create a GitHub release tagged `v2.6`. That's all: the **Build release files** action (`.github/workflows/release.yml`) builds the firmware, runs the tests and attaches the four `.bin` files to the release within a few minutes.
+
+To build by hand instead: `tools/make_release.sh` writes the four files to `release/` (`_usb`, `_wifi`, and the `_red_wifi` / `_blue_wifi` copies for sticks still on v2.3).
 
 The sticks compare the release tag with their own version. v2.4+ download the asset ending in `_wifi.bin`. Sticks still on v2.3 look for `_red_wifi.bin` / `_blue_wifi.bin`, which is why the release keeps those copies.
 
@@ -34,7 +35,8 @@ The sticks compare the release tag with their own version. v2.4+ download the as
 |---|---|
 | `src/main.cpp` | Firmware: input, Bluetooth/USB gamepad, screen, menu, sound, updates |
 | `src/moves.h` | Fighting game move lists and the move recogniser |
-| `test/test_moves.cpp` | Host tests for the move recogniser: `g++ -std=c++17 -Isrc test/test_moves.cpp && ./a.out` |
+| `test/test_moves.cpp` | Host tests for the move recogniser and trainer: `g++ -std=c++17 -Isrc test/test_moves.cpp && ./a.out` |
+| `test/test_gamelink.py` | Host tests for Game link (RetroArch replies, labels file): `python3 test/test_gamelink.py` |
 | `platformio.ini` | Builds `arcade_stick` |
 | `tools/make_release.sh` | Builds the four release files |
 | `hardware/io-board/` | I/O board for building more sticks: JLCPCB files, parts list, soldering and wiring guide |

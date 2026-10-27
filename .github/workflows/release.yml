@@ -1,0 +1,71 @@
+# Builds the firmware and attaches the release files whenever a release is
+# published on GitHub. Ben only has to create the release with the right tag
+# (e.g. v2.5, matching FW_VERSION in src/main.cpp); this does the rest:
+#   ArcadeStick_vX.Y_usb.bin, ArcadeStick_vX.Y_wifi.bin, plus the
+#   _red_wifi / _blue_wifi copies sticks still on v2.3 look for.
+# Can also be run by hand from the Actions tab for an existing tag.
+name: Build release files
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach (e.g. v2.5)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Tag must match FW_VERSION
+        run: |
+          VER=$(sed -n 's/^#define FW_VERSION *"\(.*\)".*/\1/p' src/main.cpp)
+          if [ "${TAG#v}" != "$VER" ]; then
+            echo "::error::Release tag $TAG doesn't match FW_VERSION $VER in src/main.cpp"
+            exit 1
+          fi
+
+      - name: Tests
+        run: |
+          g++ -std=c++17 -Wall -Isrc test/test_moves.cpp -o /tmp/test_moves && /tmp/test_moves
+          python3 test/test_gamelink.py
+
+      - name: Build
+        run: bash tools/make_release.sh
+
+      - name: Check the firmware tags
+        run: |
+          for f in release/*.bin; do
+            for t in 'ASID:STK1' 'ASID:RED!' 'ASID:BLUE'; do
+              grep -q "$t" "$f" || { echo "::error::$f is missing $t"; exit 1; }
+            done
+          done
+          ls -l release
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" release/*.bin --clobber

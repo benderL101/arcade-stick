@@ -20,6 +20,25 @@ std::string run(const char *game, const char *who, std::vector<Step> steps, std:
   if (r < 0) return "-";
   return std::string(f->moves[r].name) + (mir ? " (L)" : "");
 }
+// trainer: same inputs, but coached against a target move
+const char *CO_NAMES[] = {"none","OK","BUTTON","NOMOTION","MISSED","SLOW","LATE","CHARGE","CIRCLE","TAP","HOLDDIR"};
+std::string coach(const char *game, const char *who, const char *move, std::vector<Step> steps, std::vector<const char*> btns, int extraTaps = 0) {
+  const Game *g = G(game); const Fighter *f = F(g, who);
+  const Move *mv = nullptr;
+  for (int i = 0; i < f->n; i++) if (!strcmp(f->moves[i].name, move)) mv = &f->moves[i];
+  if (!mv) return "NO MOVE";
+  MotionReader mr; uint32_t t = 1000;
+  for (auto s : steps) { mr.dir(s.dir, t); t += s.ms; }
+  uint8_t held = 0; int last = 0;
+  for (auto b : btns) { last = idx(g, b); held |= 1u << last; }
+  for (int i = 0; i < extraTaps; i++) { mr.coach(*mv, last, held, t, *g); t += 120; }
+  Coach c = mr.coach(*mv, last, held, t, *g);
+  std::string r = CO_NAMES[c.code];
+  if (c.dir) r += " dir" + std::to_string(c.dir);
+  if (c.code == CO_SLOW || c.code == CO_LATE || c.code == CO_CHARGE) r += " ~" + std::to_string((c.ms + 50) / 100 * 100);
+  if (c.mirrored) r += " (L)";
+  return r;
+}
 int fails = 0;
 void expect(const char *label, std::string got, const char *want) {
   bool ok = got == want; if (!ok) fails++;
@@ -66,6 +85,22 @@ int main() {
   expect("KI Riptor HCB+MP",      run(KI, "Riptor", {{6,40},{3,40},{2,40},{1,40},{4,30}}, {"MP"}), "Fireball");
   expect("KI TJ B,F+FK",          run(KI, "T.J. Combo", {{4,60},{6,40}}, {"FK"}), "Flying Tiger Knee");
   expect("KI Spinal back+QP",     run(KI, "Spinal", {{4,500}}, {"QP"}), "Absorption Shield");
+  // trainer feedback
+  expect("TR Hadoken right",        coach(SF, "Ryu", "Hadoken", {{5,200},{2,40},{3,40},{6,30}}, {"LP"}), "OK");
+  expect("TR Hadoken facing left",  coach(SF, "Ryu", "Hadoken", {{5,200},{2,40},{1,40},{4,30}}, {"MP"}), "OK (L)");
+  expect("TR Hadoken with a kick",  coach(SF, "Ryu", "Hadoken", {{5,200},{2,40},{3,40},{6,30}}, {"LK"}), "BUTTON");
+  expect("TR Hadoken skipped 3",    coach(SF, "Ryu", "Hadoken", {{5,200},{2,60},{6,30}}, {"LP"}), "MISSED dir3");
+  expect("TR Hadoken no motion",    coach(SF, "Ryu", "Hadoken", {{5,500}}, {"LP"}), "NOMOTION");
+  expect("TR Hadoken too slow",     coach(SF, "Ryu", "Hadoken", {{2,40},{5,700},{3,40},{6,40}}, {"LP"}), "SLOW ~800");
+  expect("TR Hadoken button late",  coach(SF, "Ryu", "Hadoken", {{2,40},{3,40},{6,600}}, {"LP"}), "LATE ~600");
+  expect("TR Shoryuken missed 6",   coach(SF, "Ryu", "Shoryuken", {{5,200},{2,40},{3,30}}, {"HP"}), "MISSED dir6");
+  expect("TR Sonic Boom short",     coach(SF, "Guile", "Sonic Boom", {{4,400},{6,40}}, {"MP"}), "CHARGE dir4 ~400");
+  expect("TR Sonic Boom good",      coach(SF, "Guile", "Sonic Boom", {{4,1000},{6,40}}, {"MP"}), "OK");
+  expect("TR SPD half circle",      coach(SF, "Zangief", "Spinning Piledriver", {{6,50},{3,50},{2,50},{1,50},{4,40}}, {"HP"}), "CIRCLE");
+  expect("TR Lightning Legs slow",  coach(SF, "Chun-Li", "Lightning Legs", {{5,500}}, {"MK"}), "TAP");
+  expect("TR Lightning Legs good",  coach(SF, "Chun-Li", "Lightning Legs", {{5,500}}, {"MK"}, 2), "OK");
+  expect("TR MK2 Spear left",       coach(MK2, "Scorpion", "Spear", {{6,60},{5,60},{6,40}}, {"LP"}), "OK (L)");
+  expect("TR MK2 Fireball w/ LP",   coach(MK2, "Liu Kang", "Fireball", {{5,100},{6,60},{5,60},{6,40}}, {"LP"}), "BUTTON");
   printf("\nbattery: 4.20=%d 4.00=%d 3.85=%d 3.60=%d\n", lipoPercent(4.2f), lipoPercent(4.0f), lipoPercent(3.85f), lipoPercent(3.6f));
   printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);
   return fails != 0;

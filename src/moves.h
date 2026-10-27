@@ -219,10 +219,27 @@ static inline uint8_t mirrorDir(uint8_t d) {
   switch (d) { case 1: return 3; case 3: return 1; case 4: return 6; case 6: return 4;
                case 7: return 9; case 9: return 7; default: return d; }
 }
+static inline uint32_t mrMin(uint32_t a, uint32_t b) { return a < b ? a : b; }
 static inline bool isBack(uint8_t d) { return d == 1 || d == 4 || d == 7; }
 static inline bool isFwd(uint8_t d)  { return d == 3 || d == 6 || d == 9; }
 static inline bool isDown(uint8_t d) { return d == 1 || d == 2 || d == 3; }
 static inline bool isUp(uint8_t d)   { return d == 7 || d == 8 || d == 9; }
+
+// Trainer feedback for one target move (MotionReader::coach)
+enum CoachCode : uint8_t {
+  CO_NONE,      // no attempt yet
+  CO_OK,        // got it
+  CO_BUTTON,    // motion right, wrong button
+  CO_NOMOTION,  // button only, no motion
+  CO_MISSED,    // a direction was missed: dir says which (0 = not sure)
+  CO_SLOW,      // all directions, but too slowly: ms = how long it took
+  CO_LATE,      // button pressed too long after the motion: ms = gap
+  CO_CHARGE,    // charge too short: ms = how long it was held
+  CO_CIRCLE,    // 360 not completed
+  CO_TAP,       // not tapped fast enough
+  CO_HOLDDIR,   // direction (dir) not held while pressing
+};
+struct Coach { uint8_t code; uint8_t dir; uint16_t ms; bool mirrored; };
 
 class MotionReader {
  public:
@@ -242,11 +259,7 @@ class MotionReader {
   // Returns the index of the recognised move in f.moves, or -1.
   // mirrored = it was done facing left.
   int press(uint8_t btn, uint8_t held, uint32_t t, const Game &g, const Fighter &f, bool &mirrored) {
-    int type = (g.punchMask >> btn) & 1 ? 0 : ((g.kickMask >> btn) & 1 ? 1 : -1);
-    if (type >= 0) {                                   // rapid-tap tracking per punch / kick
-      tapT[type][tapHead[type]] = t;
-      tapHead[type] = (tapHead[type] + 1) % 3;
-    }
+    int type = noteTap(btn, t, g);
     int best = -1, bestScore = -1;
     for (uint8_t i = 0; i < f.n; i++) {
       const Move &m = f.moves[i];
@@ -262,6 +275,29 @@ class MotionReader {
     return best;
   }
 
+  // Trainer: the player pressed `btn` while practising move `m`. Says whether
+  // it worked and, if not, the most likely reason. Call instead of press().
+  Coach coach(const Move &m, uint8_t btn, uint8_t held, uint32_t t, const Game &g) {
+    int type = noteTap(btn, t, g);
+    bool btnOk = buttonScore(m.btn, btn, held, g) >= 0;
+    int s0 = matchAny(m.motion, t, false, type), s1 = matchAny(m.motion, t, true, type);
+    if (s0 >= 0 || s1 >= 0) return {uint8_t(btnOk ? CO_OK : CO_BUTTON), 0, 0, s1 > s0};
+    char buf[16];                                     // diagnose the first written form
+    size_t len = strcspn(m.motion, "|");
+    if (len >= sizeof buf) len = sizeof buf - 1;
+    memcpy(buf, m.motion, len); buf[len] = 0;
+    if (!strcmp(buf, "tap")) return {CO_TAP, 0, 0, false};
+    if (len == 1 && buf[0] >= '1' && buf[0] <= '9') return {CO_HOLDDIR, uint8_t(buf[0] - '0'), 0, false};
+    if (!strcmp(buf, "360")) return {CO_CIRCLE, 0, 0, false};
+    if (buf[0] == '[') {
+      uint32_t h0 = longestHold(buf[1] - '0', t, false), h1 = longestHold(buf[1] - '0', t, true);
+      bool mir = h1 > h0;
+      return {CO_CHARGE, uint8_t(mir ? mirrorDir(buf[1] - '0') : buf[1] - '0'), uint16_t(mrMin(mir ? h1 : h0, 9999)), mir};
+    }
+    Diag d0 = seqDiag(buf, t, false), d1 = seqDiag(buf, t, true);
+    return d1.found > d0.found ? d1.c : d0.c;         // the way round they were facing
+  }
+
   void clear() { count = 0; head = 0; memset(tapT, 0, sizeof tapT); }
 
  private:
@@ -269,6 +305,58 @@ class MotionReader {
   uint8_t head = 0, count = 0;
   uint32_t tapT[2][3] = {};
   uint8_t tapHead[2] = {0, 0};
+
+  int noteTap(uint8_t btn, uint32_t t, const Game &g) {
+    int type = (g.punchMask >> btn) & 1 ? 0 : ((g.kickMask >> btn) & 1 ? 1 : -1);
+    if (type >= 0) {                                   // rapid-tap tracking per punch / kick
+      tapT[type][tapHead[type]] = t;
+      tapHead[type] = (tapHead[type] + 1) % 3;
+    }
+    return type;
+  }
+
+  // Relaxed sequence match for the trainer: finds the steps in order within
+  // the last 2.5 s, ignoring the timing, then says what went wrong.
+  struct Diag { Coach c; int found; };
+  Diag seqDiag(const char *m, uint32_t t, bool mir) const {
+    int n = strlen(m), need = n - 1;
+    uint32_t lastEnter = 0, lastEnd = 0, firstEnd = 0;
+    for (int back = 0; back < count && need >= 0; back++) {
+      const Ev &e = at(back);
+      if (t - e.t > 2500) break;
+      uint8_t want = m[need] - '0';
+      if (mir) want = mirrorDir(want);
+      if (e.dir != want) continue;
+      uint32_t endT = back == 0 ? t : at(back - 1).t;
+      if (need == n - 1) { lastEnter = e.t; lastEnd = endT; }
+      firstEnd = endT;
+      need--;
+    }
+    int found = n - 1 - need;
+    if (found == 0) return {{CO_NOMOTION, 0, 0, mir}, 0};
+    if (need >= 0) {                                   // a step never happened
+      uint8_t d = m[need] - '0';
+      return {{CO_MISSED, uint8_t(mir ? mirrorDir(d) : d), 0, mir}, found};
+    }
+    uint32_t since = lastEnd == t ? t - lastEnter : t - lastEnd;
+    if (since > MR_LATE) return {{CO_LATE, 0, uint16_t(mrMin(since, 9999)), mir}, found};
+    return {{CO_SLOW, 0, uint16_t(mrMin(t - firstEnd, 9999)), mir}, found};
+  }
+
+  // longest continuous hold of `from` (back/down) in the last 3 s
+  uint32_t longestHold(uint8_t from, uint32_t t, bool mir) const {
+    bool horiz = (from == 4);
+    uint32_t best = 0, runStart = 0; bool inRun = false;
+    for (int back = count - 1; back >= 0; back--) {    // oldest -> newest
+      const Ev &e = at(back);
+      uint32_t endT = back == 0 ? t : at(back - 1).t;
+      if (t - endT > 3000) continue;
+      bool isFrom = horiz ? (mir ? isFwd(e.dir) : isBack(e.dir)) : isDown(e.dir);
+      if (isFrom) { if (!inRun) { runStart = e.t; inRun = true; } if (endT - runStart > best) best = endT - runStart; }
+      else inRun = false;
+    }
+    return best;
+  }
 
   const Ev &last() const { return ev[(head + HIST - 1) % HIST]; }
   const Ev &at(int back) const { return ev[(head + HIST - 1 - back) % HIST]; }   // 0 = newest

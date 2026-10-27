@@ -45,10 +45,11 @@ Both reflect how real sticks are **actually wired**, so never "tidy" them. START
 pio run -e arcade_stick        # the one firmware
 tools/make_release.sh          # writes the four release files to release/
 g++ -std=c++17 -Wall -Isrc test/test_moves.cpp -o /tmp/tm && /tmp/tm   # move recogniser tests (must be ALL PASSED)
+python3 test/test_gamelink.py   # Game link: RetroArch status parsing + labels file (must be ALL PASSED)
 ```
 
 - Platform: pioarduino `55.03.30-2`, which is Arduino-ESP32 3.3.0. Partitions are `default_16MB.csv`, with app0/app1 for OTA.
-- Libraries are pinned in `platformio.ini`: LovyanGFX 1.2.32, ESP32-BLE-Gamepad 0.8.0, NimBLE-Arduino 2.5.1. Don't bump them casually.
+- Libraries are pinned in `platformio.ini` to git tags: LovyanGFX 1.2.32, ESP32-BLE-Gamepad v0.8.0, NimBLE-Arduino 2.5.1. Don't bump them casually. (ESP32-BLE-Gamepad already asks the host for a 7.5-8.75 ms connection interval; the UI task checks the agreed interval, re-asks once if slower, and shows it on Input test.)
 - USB merged bin: build it with `--flash-mode dio --flash-size 16MB`. The parts go at bootloader 0x0, partitions 0x8000, boot_app0 0xe000 and app 0x10000. `make_release.sh` already does this.
 
 ## Releasing (how updates reach the sticks)
@@ -57,9 +58,7 @@ g++ -std=c++17 -Wall -Isrc test/test_moves.cpp -o /tmp/tm && /tmp/tm   # move re
 2. Run `tools/make_release.sh`. Then run the tests.
 3. Check the tags: every `.bin` must contain `ASID:STK1`, `ASID:RED!` and `ASID:BLUE` (`grep -c` gives 1 each). STK1 is what v2.4+ accepts; the two old tags let sticks still on v2.3 accept the update and let the first boot recognise the red stick.
 4. Commit and push to `main`.
-5. **Ben publishes the GitHub release himself.** Cloud Claude sessions can't create releases or upload release files: the API is blocked. So send him the four files and tell him to:
-   - create a release tagged with the version (`v2.4` or `2.4` both work)
-   - attach all four files: `_usb.bin`, `_wifi.bin`, and the identical `_red_wifi.bin` / `_blue_wifi.bin` copies (for sticks still on v2.3)
+5. **Ben publishes the GitHub release himself** (cloud Claude sessions can't create releases or upload release files). He only creates the release with the tag (`v2.5` or `2.5`); the **Build release files** GitHub Action (`.github/workflows/release.yml`) checks the tag matches `FW_VERSION`, runs both test suites, builds, checks the ASID tags and attaches the four files. Still send him the files too, in case the action fails (he can attach them by hand).
 6. Update `docs/MANUAL.md` for anything user-visible. It also ships as `README.md` in the zip package.
 
 ### Rules the on-stick updater depends on
@@ -90,12 +89,14 @@ So:
   - The SELECT layer is `selLayer` plus `HOTKEYS[]`. SELECT is sent along with the hotkey target, and buttons used in the layer are suppressed until released.
   - RetroArch's Hotkey Enable is bound to SELECT.
 - **Settings:** `struct Settings` lives in Preferences. Its `version` field is 2. **Only ever append new fields at the end.** `loadSettings()` reads partial lengths, so updates keep old settings. Never reorder fields or change their sizes.
-  - The settings file has magic `ASTK`. Loading a file from another stick keeps the local `player` and `conn`. `theme` is unused since v2.4.
+  - The settings file has magic `ASTK`. Loading a file from another stick keeps the local `player` and `conn`. `theme` is unused since v2.4. v2.5 appended `trainer` and `gameLink`.
 - **UI:**
   - `enum Screen` holds the screens.
   - `enum MenuItem` and `MENU_LABEL[]` must stay in the same order. Add an item to both lists, plus `menuValue()`, `menuSelect()` and the `S_MENU` right-press list.
   - Drawing is `render()` into a PSRAM sprite. Set `uiDirty = true` to request a redraw.
-- **Pages on the status screen:** Buttons, Inputs (history in frames), and Moves.
+- **Pages on the status screen:** Buttons, Inputs (history in frames), and Moves (or the trainer when `cfg.trainer` is on).
+- **Combo trainer:** `MotionReader::coach()` in `moves.h` returns a `Coach` (OK / wrong button / missed direction / too slow / too late / short charge / ...). The input loop calls it instead of `press()` when the trainer is on; `drawPageTrainer()` shows it; 3 in a row advances (`trainNext`, skipping moves with "hold" buttons/motions).
+- **Game link** (`linkTask`, its own task on core 0): with `cfg.gameLink` on and a home Wi-Fi saved, joins Wi-Fi **alongside Bluetooth** (modem sleep on, required for coexistence), sends `GET_STATUS` to RetroArch on UDP 55355 every 2.5 s (broadcast until RetroArch answers, then unicast), parses the reply with `splitStatus()`, and serves the labels page on port 80 (also `arcadestick-<colour>.local`). Labels live in LittleFS `/labels.txt`, one line per game key (lower-case file name) or `sys:<system>`, as `BUTTON=label` pairs keyed by `OUT_NAME`, so they follow the profile. Strings shared with the UI are guarded by `linkMux`. `wifiStart()` / `onlineStart()` call `linkStop()` first so the port-80 servers never clash.
 - **Sound:** `playSound(SND_*)` and `soundEvents()`.
   - Note constants use an `F_` prefix, because `A2`–`A6` clash with Arduino pin names.
 - **Power:**

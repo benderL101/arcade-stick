@@ -1,6 +1,6 @@
 /*
  * =====================================================================
- *  DIY ARCADE STICK FIRMWARE  v2.4
+ *  DIY ARCADE STICK FIRMWARE  v2.5
  *  One firmware for every stick: the colour (and so the Bluetooth name)
  *  and the wiring are chosen in the stick's own menu.
  *  Freenove ESP32-S3 2.8" Display (FNK0104, non-touch)
@@ -45,6 +45,10 @@
 #include <Update.h>
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
+#include <WiFiUdp.h>
+#include <ESPmDNS.h>
+#include <LittleFS.h>
+#include <vector>
 #include "moves.h"
 #include "ESP_I2S.h"
 
@@ -91,7 +95,7 @@
 const char *COLOUR_NAME[COLOUR_COUNT] = {"Blue", "Red", "Green", "Yellow", "Orange", "Purple", "Pink", "White"};
 const uint16_t COLOUR_RGB[COLOUR_COUNT] = {0x2B7F, 0xE145, 0x3E4B, 0xFE60, 0xFC40, 0xAA9C, 0xF8B6, 0xE73C};
 #define DEFAULT_PLAYER    0        // P1
-#define FW_VERSION  "2.4"
+#define FW_VERSION  "2.5"
 #define UPDATE_REPO "benderL101/arcade-stick"   // GitHub repo the stick checks for new releases
 
 // Power off: hold START this long. While off the board naps and checks
@@ -230,6 +234,8 @@ struct Settings {
   uint8_t game = 0;          // move list game
   uint8_t fighter = 0;       // move list character
   uint8_t moveCheck = 2;     // 0 off, 1 show on screen, 2 screen + sound   (added v2.2)
+  uint8_t trainer = 0;       // combo trainer: 0 off, 1 on, 2 on + sound      (added v2.5)
+  uint8_t gameLink = 0;      // read the running game from RetroArch: 0 off, 1 on  (added v2.5)
 } cfg;
 Preferences prefs;
 uint8_t bootConn;            // connection mode actually started at boot
@@ -262,6 +268,8 @@ void loadSettings() {
   if (cfg.game >= GAME_COUNT) cfg.game = 0;
   if (cfg.fighter >= GAMES[cfg.game].n) cfg.fighter = 0;
   if (cfg.moveCheck > 2) cfg.moveCheck = 2;
+  if (cfg.trainer > 2) cfg.trainer = 0;
+  cfg.gameLink = cfg.gameLink ? 1 : 0;
 }
 void saveSettings() {
   prefs.begin("stick", false);
@@ -327,6 +335,24 @@ USBCDC debugSerial;          // serial monitor + lets the IDE auto-reset for upl
 BleGamepad *blePad = nullptr;        // made in setup(): its Bluetooth name comes from the colour
 volatile bool usbMounted = false;
 volatile bool radioOff = false;      // Bluetooth shut down (Wi-Fi update mode)
+volatile uint16_t btIntervalX100 = 0; // agreed Bluetooth connection interval, 1/100 ms (0 = not connected)
+// ======================= GAME LINK: shared state ===================
+// Menu -> Game link: while playing, the stick also joins the home Wi-Fi,
+// asks RetroArch which game is running (network command GET_STATUS, UDP
+// port 55355) and shows that game's button labels on the Buttons page.
+// Labels are typed on a phone at http://<stick IP>/ and kept on the stick.
+// They're stored per RetroArch button (A, B, X, ... as named in OUT_NAME),
+// so they stay right whichever profile is in use.
+enum LinkState : uint8_t { LS_OFF, LS_NOSSID, LS_JOINING, LS_NOWIFI, LS_SEARCHING, LS_NOGAME, LS_GAME };
+#define LABEL_LEN 16
+volatile uint8_t linkState = LS_OFF;
+SemaphoreHandle_t linkMux = nullptr;          // guards the strings below
+char linkIp[16] = "";
+char gameTitle[64] = "", gameSys[24] = "";
+char curLabel[OUT_COUNT][LABEL_LEN];          // labels for the running game ("" = none)
+bool curHasLabels = false;
+volatile bool linkStopReq = false, linkStopped = true;
+
 
 struct Report {
   uint32_t buttons;
@@ -367,6 +393,26 @@ std::atomic<uint8_t> histHead{0};
 // Move recognition for the Moves page
 MotionReader motion;
 volatile int8_t moveHit = -1;
+// combo trainer
+volatile uint8_t trainIdx = 0, trainStreak = 0;
+volatile uint32_t trainAt = 0, trainSeq = 0;
+Coach trainRes = {CO_NONE, 0, 0, false};
+static bool trainable(const Move &m) {
+  return m.btn[0] && strncmp(m.btn, "hold", 4) && strcmp(m.motion, "hold");
+}
+// next move the trainer can check (wraps round); from = current index
+uint8_t trainNext(const Fighter &f, int from) {
+  for (int k = 1; k <= f.n; k++) {
+    int i = (from + k) % f.n;
+    if (trainable(f.moves[i])) return i;
+  }
+  return 0;
+}
+void trainReset() {
+  const Fighter &f = GAMES[cfg.game].fighters[cfg.fighter];
+  trainIdx = trainable(f.moves[0]) ? 0 : trainNext(f, 0);
+  trainStreak = 0; trainRes = {CO_NONE, 0, 0, false}; trainAt = 0;
+}
 volatile bool moveHitMirror = false;
 volatile uint32_t moveHitAt = 0;
 std::atomic<uint32_t> moveHitSeq{0};
@@ -508,7 +554,19 @@ void scanInputs() {
       inputHist[h] = {d, btnEdges, now};
       histHead = (h + 1) % HIST_LEN;
     }
-    if (cfg.page == PG_MOVES && cfg.moveCheck) {
+    if (cfg.page == PG_MOVES && cfg.trainer) {
+      uint8_t held6 = (state >> ACT_FIRST) & 0x3F, new6 = (newEdges >> ACT_FIRST) & 0x3F;
+      for (uint8_t b = 0; b < 6; b++) {
+        if (!(new6 & (1u << b))) continue;
+        const Game &gm = GAMES[cfg.game];
+        const Fighter &f = gm.fighters[cfg.fighter];
+        if (trainStreak >= 3) break;                 // showing "next move" for a moment
+        Coach c = motion.coach(f.moves[trainIdx % f.n], b, held6, now, gm);
+        trainRes = c;
+        trainStreak = c.code == CO_OK ? trainStreak + 1 : 0;
+        trainAt = now ? now : 1; trainSeq++; uiDirty = true;
+      }
+    } else if (cfg.page == PG_MOVES && cfg.moveCheck) {
       uint8_t held6 = (state >> ACT_FIRST) & 0x3F, new6 = (newEdges >> ACT_FIRST) & 0x3F;
       for (uint8_t b = 0; b < 6; b++) {
         if (!(new6 & (1u << b))) continue;
@@ -890,10 +948,10 @@ bool settingsDirty = false;
 const char *messageText = "";
 uint32_t messageUntil = 0;
 
-enum MenuItem { M_PROFILE, M_REMAP, M_TURBO, M_STICK, M_GAME, M_FIGHTER, M_MOVECHECK, M_CONN, M_FORGET, M_BRIGHT, M_SLEEP, M_AUTOOFF,
+enum MenuItem { M_PROFILE, M_REMAP, M_TURBO, M_STICK, M_GAME, M_FIGHTER, M_MOVECHECK, M_TRAINER, M_CONN, M_GAMELINK, M_FORGET, M_BRIGHT, M_SLEEP, M_AUTOOFF,
                 M_SOUND, M_CLICKS, M_COLOUR, M_PLAYER, M_SOCD, M_FLIP, M_WIRING, M_TEST, M_ONLINE, M_UPDATE, M_WIFI, M_EXIT, M_COUNT };
 const char *MENU_LABEL[M_COUNT] = {
-  "Profile", "Remap buttons", "Turbo", "Stick", "Game", "Fighter", "Move check", "Connection",
+  "Profile", "Remap buttons", "Turbo", "Stick", "Game", "Fighter", "Move check", "Trainer", "Connection", "Game link",
   "Forget BT pairings", "Brightness", "Screen sleep", "Auto power off", "Sound", "Button clicks",
   "Colour", "Player", "Left + Right", "Flip screen", "Wiring", "Input test", "Check for update", "USB update", "Wi-Fi update", "Save & exit"
 };
@@ -1020,8 +1078,54 @@ int drawBtnChip(LGFX_Sprite &g, int x, int cy, const char *spec, const Game &gm)
   return x + w + 6;
 }
 
+// a game label inside a button: split at "/" or a space onto two lines
+void drawLabelIn(LGFX_Sprite &g, int x, int y, int rad, const char *lab, uint16_t col) {
+  char a[LABEL_LEN], b[LABEL_LEN] = "";
+  strlcpy(a, lab, sizeof a);
+  char *cut = strchr(a, '/');
+  if (!cut) cut = strchr(a, ' ');
+  if (cut) { strlcpy(b, cut + 1, sizeof b); *cut = 0; }
+  g.setTextColor(col); g.setTextDatum(middle_center);
+  g.setFont(&fonts::Font2);
+  int maxw = rad * 2 - 4;
+  if (g.textWidth(a) > maxw || g.textWidth(b) > maxw) g.setFont(&fonts::Font0);
+  if (b[0]) { g.drawString(a, x, y - (g.fontHeight() / 2)); g.drawString(b, x, y + (g.fontHeight() / 2)); }
+  else g.drawString(a, x, y + 1);
+}
+
 void drawPageButtons(LGFX_Sprite &g, uint16_t s) {
   const uint8_t *amap = activeMap();
+  // Game link: the running game and its labels
+  char lab[ACT_COUNT][LABEL_LEN] = {}; bool haveLab = false;
+  char title[64] = "", ip[16] = "";
+  uint8_t ls = linkState;
+  if (cfg.gameLink && linkMux && xSemaphoreTake(linkMux, pdMS_TO_TICKS(5)) == pdTRUE) {
+    for (uint8_t i = 0; i < ACT_COUNT; i++) strlcpy(lab[i], curLabel[amap[i]], LABEL_LEN);
+    haveLab = curHasLabels;
+    strlcpy(title, gameTitle, sizeof title);
+    strlcpy(ip, linkIp, sizeof ip);
+    xSemaphoreGive(linkMux);
+  }
+  if (cfg.gameLink && ip[0]) {
+    g.setFont(&fonts::Font2); g.setTextDatum(middle_left);
+    if (ls == LS_GAME) {
+      g.setTextColor(C_TEXT);
+      while (strlen(title) > 4 && g.textWidth(title) > 300) title[strlen(title) - 1] = 0;
+      g.drawString(title, 10, 38);
+      if (!haveLab) {
+        g.setFont(&fonts::Font0); g.setTextColor(C_DIM);
+        char h[48]; snprintf(h, sizeof h, "add labels: http://%s", ip);
+        g.drawString(h, 10, 52);
+      }
+    } else {
+      g.setFont(&fonts::Font0); g.setTextColor(C_DIM);
+      char h[48];
+      snprintf(h, sizeof h, ls == LS_NOGAME ? "Game link: waiting for a game" : "Game link: looking for RetroArch");
+      g.drawString(h, 10, 38);
+      snprintf(h, sizeof h, "labels: http://%s", ip);
+      g.drawString(h, 10, 50);
+    }
+  }
   // joystick
   const int jx = 62, jy = 112;
   g.drawCircle(jx, jy, 44, C_LINE);
@@ -1047,8 +1151,9 @@ void drawPageButtons(LGFX_Sprite &g, uint16_t s) {
     if (turbo) g.drawCircle(p.x, p.y, rad + 3, C_TURBO);
     g.fillCircle(p.x, p.y, rad, on ? C_ACCENT : C_PANEL);
     g.drawCircle(p.x, p.y, rad, on ? C_ACCENT : C_LINE);
+    if (haveLab && lab[i][0]) { drawLabelIn(g, p.x, p.y, rad, lab[i], on ? C_BG : C_TEXT); continue; }
     if (i < 6) g.setFont(&fonts::FreeSansBold9pt7b); else g.setFont(&fonts::Font2);
-    g.setTextColor(on ? C_BG : C_TEXT);
+    g.setTextColor(on ? C_BG : (haveLab ? C_DIM : C_TEXT));
     g.setTextDatum(middle_center);
     g.drawString(OUT_NAME[amap[i]], p.x, p.y + 1);
   }
@@ -1110,9 +1215,74 @@ void drawPageInputs(LGFX_Sprite &g) {
   }
 }
 
+// Trainer view of the Moves page: one move at a time, with feedback on each try
+void drawPageTrainer(LGFX_Sprite &g) {
+  const Game &gm = GAMES[cfg.game];
+  const Fighter &f = gm.fighters[cfg.fighter];
+  const Move &m = f.moves[trainIdx % f.n];
+  char buf[64];
+  g.setFont(&fonts::Font0); g.setTextColor(C_DIM); g.setTextDatum(middle_center);
+  snprintf(buf, sizeof buf, "TRAINER  -  %s  -  %s", f.name, gm.name);
+  g.drawString(buf, 160, 38);
+  g.setFont(&fonts::FreeSansBold12pt7b); g.setTextColor(C_TEXT);
+  g.drawString(m.name, 160, 62);
+  // the input, centred: measure by drawing off the right edge first
+  int w = drawBtnChip(g, drawMotion(g, 400, 92, m.motion, C_TEXT) + 2, 92, m.btn, gm) - 400;
+  int x = 160 - w / 2;
+  x = drawMotion(g, x, 92, m.motion, C_ACCENT);
+  drawBtnChip(g, x + 2, 92, m.btn, gm);
+  // streak
+  for (int i = 0; i < 3; i++) {
+    int cx = 136 + i * 24;
+    if (i < trainStreak) g.fillCircle(cx, 120, 7, C_OK); else g.drawCircle(cx, 120, 7, C_DIM);
+  }
+  // feedback
+  uint32_t now = millis();
+  bool fresh = trainAt && now - trainAt < 2500;
+  g.setTextDatum(middle_center);
+  if (!fresh) {
+    g.setFont(&fonts::Font2); g.setTextColor(C_DIM);
+    g.drawString("Do the move. 3 in a row moves on to the next one.", 160, 160);
+    g.drawString("Works facing either way.", 160, 180);
+    return;
+  }
+  const Coach c = trainRes;
+  const char *head = "", *tip = "";
+  uint16_t col = C_WARN;
+  char tipBuf[48] = "";
+  switch (c.code) {
+    case CO_OK:       head = trainStreak >= 3 ? "Nailed it! Next move..." : "Got it!"; col = C_OK;
+                      tip = c.mirrored ? "(facing left)" : ""; break;
+    case CO_BUTTON:   head = "Right motion, wrong button"; tip = "check the button shown above"; break;
+    case CO_NOMOTION: head = "Do the motion first"; tip = "then press the button"; break;
+    case CO_MISSED:   head = c.dir ? "Missed a direction:" : "Not quite"; tip = c.dir ? "" : "try it a bit slower and cleaner"; break;
+    case CO_SLOW:     head = "Too slow";
+                      snprintf(tipBuf, sizeof tipBuf, "took %.1f s - do it in one smooth roll", c.ms / 1000.0f); tip = tipBuf; break;
+    case CO_LATE:     head = "Button too late";
+                      snprintf(tipBuf, sizeof tipBuf, "press it as you finish the motion (%.1f s gap)", c.ms / 1000.0f); tip = tipBuf; break;
+    case CO_CHARGE:   head = "Hold back longer";
+                      snprintf(tipBuf, sizeof tipBuf, "held %.1f s - hold it about 1 s first", c.ms / 1000.0f); tip = tipBuf; break;
+    case CO_CIRCLE:   head = "Go all the way round"; tip = "a full circle, then the button"; break;
+    case CO_TAP:      head = "Tap faster"; tip = "3 quick presses"; break;
+    case CO_HOLDDIR:  head = "Hold the direction"; tip = "keep it held while you press"; break;
+    default: break;
+  }
+  g.setFont(&fonts::FreeSansBold12pt7b); g.setTextColor(col);
+  if (c.code == CO_MISSED && c.dir) {
+    int tw = g.textWidth(head);
+    g.drawString(head, 160 - 14, 158);
+    drawArrow(g, 160 - 14 + tw / 2 + 18, 158, c.dir, col, 9);
+  } else {
+    g.drawString(head, 160, 158);
+  }
+  g.setFont(&fonts::Font2); g.setTextColor(C_DIM);
+  g.drawString(tip, 160, 184);
+}
+
 // Moves page: the selected fighter's special moves; recognised moves light up
 uint16_t moveCount[8];
 void drawPageMoves(LGFX_Sprite &g) {
+  if (cfg.trainer) { drawPageTrainer(g); return; }
   const Game &gm = GAMES[cfg.game];
   const Fighter &f = gm.fighters[cfg.fighter];
   g.setFont(&fonts::FreeSansBold12pt7b);
@@ -1298,6 +1468,19 @@ void menuValue(int item, char *buf, size_t n) {
     case M_STICK:   snprintf(buf, n, "< %s >", STICK_NAME[cfg.stickMode]); break;
     case M_CONN:    snprintf(buf, n, "< %s >%s", cfg.conn == C_USB ? "USB" : "Bluetooth",
                              cfg.conn != bootConn ? " *" : ""); break;
+    case M_GAMELINK: {
+      const char *st = "Off";
+      if (cfg.gameLink) switch (linkState) {
+        case LS_NOSSID:    st = "On: save home Wi-Fi"; break;
+        case LS_JOINING:   st = "On: joining Wi-Fi"; break;
+        case LS_NOWIFI:    st = "On: Wi-Fi not found"; break;
+        case LS_SEARCHING: st = "On: no RetroArch"; break;
+        case LS_NOGAME:
+        case LS_GAME:      st = "On: connected"; break;
+        default:           st = "On"; break;
+      }
+      snprintf(buf, n, "< %s >", st); break;
+    }
     case M_BRIGHT:  snprintf(buf, n, "< %d%% >", cfg.brightness); break;
     case M_FLIP:    snprintf(buf, n, "< %s >", cfg.flip ? "On" : "Off"); break;
     case M_SOUND:   snprintf(buf, n, soundOk || !cfg.sound ? "< %s >" : "< %s > (no speaker)", SOUND_NAME[cfg.sound]); break;
@@ -1311,6 +1494,7 @@ void menuValue(int item, char *buf, size_t n) {
     case M_GAME:    snprintf(buf, n, "< %s >", GAMES[cfg.game].name); break;
     case M_FIGHTER: snprintf(buf, n, "< %s >", GAMES[cfg.game].fighters[cfg.fighter].name); break;
     case M_MOVECHECK: snprintf(buf, n, "< %s >", cfg.moveCheck == 0 ? "Off" : (cfg.moveCheck == 1 ? "On, no sound" : "On + sound")); break;
+    case M_TRAINER:   snprintf(buf, n, "< %s >", cfg.trainer == 0 ? "Off" : (cfg.trainer == 1 ? "On, no sound" : "On + sound")); break;
     case M_REMAP: case M_TURBO: case M_TEST: case M_ONLINE: case M_UPDATE: case M_WIFI: snprintf(buf, n, ">"); break;
     default: break;
   }
@@ -1427,7 +1611,10 @@ void drawTest(LGFX_Sprite &g) {
     g.setTextDatum(middle_right);
     g.drawString(PHYS_PIN[p], x + 140, y + 11);
   }
-  drawFooterHint(g, mcpOk ? "Hold HOME 2 s to go back" : "MCP23017 not found at 0x20 - check wiring");
+  char hint[64] = "Hold HOME 2 s to go back";
+  if (!mcpOk) snprintf(hint, sizeof hint, "MCP23017 not found at 0x20 - check wiring");
+  else if (btIntervalX100) snprintf(hint, sizeof hint, "BT link every %.2f ms   Hold HOME 2 s: back", btIntervalX100 / 100.0f);
+  drawFooterHint(g, hint);
 }
 
 void drawUpdate(LGFX_Sprite &g) {
@@ -1568,7 +1755,9 @@ void sendMsg(const char *title, const char *msg) {
   web->send(200, "text/html", p);
 }
 
+void linkStop();
 void wifiStart() {
+  linkStop();
   if (bootConn == C_BLE) { radioOff = true; delay(20); NimBLEDevice::deinit(true); }   // Wi-Fi only; restarts after
   showMessage("Starting Wi-Fi...", 0);
   WiFi.mode(WIFI_AP_STA);
@@ -1859,6 +2048,7 @@ void onlineTask(void *) {
 }
 
 void onlineStart() {
+  linkStop();
   if (bootConn == C_BLE) { radioOff = true; delay(20); NimBLEDevice::deinit(true); }   // Wi-Fi only; restarts after
   olInstall = false; olError = "";
   olState = OL_JOINING;
@@ -1947,6 +2137,359 @@ void drawOnline(LGFX_Sprite &g) {
   }
 }
 
+// ======================= GAME LINK (RetroArch) =====================
+// Label file /labels.txt on the flash, one line per game (or system):
+//   <key>\t<button>=<label>\t<button>=<label>...
+// key = the game's file name as RetroArch reports it, lower case, or
+// "sys:<system>" for every game on that system (used when a game has none).
+struct LabelSet { String key; String lab[OUT_COUNT]; };
+std::vector<LabelSet> labelDb;
+bool fsOk = false;
+
+String lowerStr(String s) { s.toLowerCase(); return s; }
+String urlEnc(const String &s) {
+  String o; char h[4];
+  for (char c : s) {
+    if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.') o += c;
+    else { snprintf(h, sizeof h, "%%%02X", (uint8_t)c); o += h; }
+  }
+  return o;
+}
+int outIndex(const String &name) {
+  for (int i = 0; i < OUT_COUNT; i++) if (name == OUT_NAME[i]) return i;
+  return -1;
+}
+String cleanLabel(String v) {
+  v.replace("\t", " "); v.replace("\r", " "); v.replace("\n", " "); v.trim();
+  if (v.length() > LABEL_LEN - 1) v = v.substring(0, LABEL_LEN - 1);
+  v.trim();                                  // a cut can leave a trailing space
+  return v;
+}
+void labelsParse(const String &text, std::vector<LabelSet> &db) {
+  db.clear();
+  int pos = 0;
+  while (pos < (int)text.length()) {
+    int nl = text.indexOf('\n', pos);
+    if (nl < 0) nl = text.length();
+    String line = text.substring(pos, nl); pos = nl + 1;
+    line.replace("\r", "");
+    int tab = line.indexOf('\t');
+    if (tab <= 0) continue;
+    LabelSet ls; ls.key = lowerStr(line.substring(0, tab));
+    int p = tab + 1;
+    while (p < (int)line.length()) {
+      int t2 = line.indexOf('\t', p); if (t2 < 0) t2 = line.length();
+      String kv = line.substring(p, t2); p = t2 + 1;
+      int eq = kv.indexOf('=');
+      int oi = eq > 0 ? outIndex(kv.substring(0, eq)) : -1;
+      if (oi > 0) ls.lab[oi] = cleanLabel(kv.substring(eq + 1));
+    }
+    db.push_back(ls);
+  }
+}
+String labelsText() {
+  String out;
+  for (auto &ls : labelDb) {
+    out += ls.key;
+    for (int i = 1; i < OUT_COUNT; i++) if (ls.lab[i].length()) { out += '\t'; out += OUT_NAME[i]; out += '='; out += ls.lab[i]; }
+    out += '\n';
+  }
+  return out;
+}
+void labelsLoad() {
+  fsOk = LittleFS.begin(true);
+  if (!fsOk) return;
+  File f = LittleFS.open("/labels.txt", "r");
+  if (!f) return;
+  String text = f.readString(); f.close();
+  labelsParse(text, labelDb);
+}
+void labelsSaveFile() {
+  if (!fsOk) return;
+  File f = LittleFS.open("/labels.txt", "w");
+  if (!f) return;
+  f.print(labelsText()); f.close();
+}
+int labelsFind(const String &key) {
+  for (size_t i = 0; i < labelDb.size(); i++) if (labelDb[i].key == key) return i;
+  return -1;
+}
+String gameKey(const char *title) { return lowerStr(String(title)); }
+String sysKey(const char *sys) { return "sys:" + lowerStr(String(sys)); }
+
+// pick the labels for what's running now (call with linkMux held)
+void applyLabels() {
+  memset(curLabel, 0, sizeof curLabel);
+  curHasLabels = false;
+  if (linkState != LS_GAME) return;
+  int i = labelsFind(gameKey(gameTitle));
+  if (i < 0) i = labelsFind(sysKey(gameSys));
+  if (i < 0) return;
+  for (int k = 1; k < OUT_COUNT; k++) {
+    strlcpy(curLabel[k], labelDb[i].lab[k].c_str(), LABEL_LEN);
+    if (curLabel[k][0]) curHasLabels = true;
+  }
+}
+
+WebServer *linkWeb = nullptr;
+WiFiUDP linkUdp;
+IPAddress raHost;                 // RetroArch's address once it has answered
+bool raKnown = false;
+
+String linkHostname() { String h = String("arcadestick-") + COLOUR_NAME[stickColour]; h.toLowerCase(); return h; }
+
+static const char LINK_PAGE_HEAD[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>%NAME% labels</title>
+<style>body{font-family:system-ui,sans-serif;background:#10141c;color:#e8ecf1;margin:0;padding:18px;max-width:560px}
+h1{font-size:21px;margin:0 0 4px}p{color:#9aa4b2;margin:4px 0 12px}section{background:#1a2030;border-radius:10px;padding:14px;margin:12px 0}
+h2{font-size:16px;margin:0 0 10px;color:%HEX%}label{display:block;margin:8px 0 2px;color:#c9d1db;font-size:14px}
+input[type=text]{background:#10141c;color:#e8ecf1;border:1px solid #3a4456;border-radius:6px;padding:9px;width:100%;box-sizing:border-box;font-size:16px}
+button,a.b{background:%HEX%;color:#10141c;border:0;border-radius:8px;padding:10px 14px;font-weight:600;text-decoration:none;display:inline-block;margin-top:10px}
+.k{background:#2a3244;color:#e8ecf1}table{width:100%;border-collapse:collapse}td{padding:6px 2px;border-bottom:1px solid #2a3244;font-size:14px}
+.g{color:%HEX%;font-weight:600}</style></head><body>)HTML";
+
+void linkSend(const String &body) {
+  String p = FPSTR(LINK_PAGE_HEAD);
+  char hex[8]; uint16_t c = C_ACCENT;
+  snprintf(hex, sizeof hex, "#%02x%02x%02x", (c >> 8) & 0xF8, (c >> 3) & 0xFC, (c << 3) & 0xF8);
+  p.replace("%NAME%", deviceName()); p.replace("%HEX%", hex);
+  p += body; p += "</body></html>";
+  linkWeb->send(200, "text/html", p);
+}
+
+void linkPageMain() {
+  String editKey = linkWeb->hasArg("key") ? lowerStr(linkWeb->arg("key")) : String();
+  String title, sys; uint8_t st;
+  xSemaphoreTake(linkMux, portMAX_DELAY);
+  title = gameTitle; sys = gameSys; st = linkState;
+  xSemaphoreGive(linkMux);
+  String b = "<h1>" + htmlEsc(deviceName()) + "</h1><p>Button labels for each game</p><section><h2>Now playing</h2>";
+  if (st == LS_GAME) b += "<p class=g>" + htmlEsc(title) + "</p><p>" + htmlEsc(sys) + "</p>";
+  else if (st == LS_NOGAME) b += "<p>RetroArch is open, but no game is running.</p>";
+  else b += "<p>RetroArch isn't answering. On the Legion Go S, in RetroArch: <b>Settings &rarr; Network &rarr; Network Commands &rarr; On</b>.</p>";
+  b += "</section>";
+
+  // the form: for the running game, or a saved entry being edited
+  String key = editKey.length() ? editKey : (st == LS_GAME ? gameKey(title.c_str()) : String());
+  if (key.length()) {
+    int i = labelsFind(key);
+    if (i < 0 && !editKey.length()) i = labelsFind(sysKey(sys.c_str()));   // start from the system's labels
+    const uint8_t *amap = activeMap();
+    b += "<section><h2>Labels</h2><form method=POST action=/save><input type=hidden name=key value=\"" + htmlEsc(key) + "\">";
+    if (key.startsWith("sys:")) b += "<p>For every <b>" + htmlEsc(key.substring(4)) + "</b> game without its own labels.</p>";
+    else b += "<p>For <b>" + htmlEsc(editKey.length() ? key : title) + "</b>. Keep them short: 2 lines of about 6 letters, e.g. <i>Shoot/Block</i>.</p>";
+    const char *where[7] = {"B1 top left", "B2 top middle", "B3 top right", "B4 bottom left", "B5 bottom middle", "B6 bottom right", "EX extra"};
+    for (int a = 0; a < ACT_COUNT; a++) {
+      uint8_t o = amap[a];
+      if (o == O_NONE) continue;
+      String v = i >= 0 ? labelDb[i].lab[o] : String();
+      b += "<label>" + String(where[a]) + " (sends " + OUT_NAME[o] + ")</label><input type=text maxlength=15 name=\"" + String(OUT_NAME[o]) + "\" value=\"" + htmlEsc(v) + "\">";
+    }
+    if (!editKey.length() && sys.length())
+      b += "<label><input type=checkbox name=allsys value=1> Use these for every " + htmlEsc(sys) + " game</label>";
+    b += "<button>Save</button></form></section>";
+  }
+
+  // saved list
+  b += "<section><h2>Saved</h2>";
+  if (labelDb.empty()) b += "<p>Nothing yet.</p>";
+  else {
+    b += "<table>";
+    for (auto &ls : labelDb) {
+      String k = htmlEsc(ls.key);
+      b += "<tr><td>" + k + "</td><td style=text-align:right><a class='b k' href=\"/?key=" + urlEnc(ls.key) + "\">Edit</a> "
+           "<form method=POST action=/del style=display:inline><input type=hidden name=key value=\"" + k + "\"><button class=k>Delete</button></form></td></tr>";
+    }
+    b += "</table>";
+  }
+  b += "</section><section><h2>Copy to another stick</h2><a class=b href=/labels.txt>Download labels</a>"
+       "<form method=POST action=/labels enctype=multipart/form-data><input type=file name=f accept=.txt><br><button>Load labels file</button></form></section>";
+  linkSend(b);
+}
+
+void linkRedirect() { linkWeb->sendHeader("Location", "/"); linkWeb->send(303); }
+
+void linkStartWeb() {
+  linkWeb = new WebServer(80);
+  linkWeb->on("/", HTTP_GET, linkPageMain);
+  linkWeb->on("/save", HTTP_POST, [] {
+    String key = lowerStr(linkWeb->arg("key"));
+    if (linkWeb->hasArg("allsys")) {
+      xSemaphoreTake(linkMux, portMAX_DELAY); key = sysKey(gameSys); xSemaphoreGive(linkMux);
+    }
+    if (!key.length() || key.indexOf('\t') >= 0 || key.indexOf('\n') >= 0) { linkRedirect(); return; }
+    LabelSet ls; ls.key = key;
+    bool any = false;
+    for (int o = 1; o < OUT_COUNT; o++)
+      if (linkWeb->hasArg(OUT_NAME[o])) { ls.lab[o] = cleanLabel(linkWeb->arg(OUT_NAME[o])); any |= ls.lab[o].length() > 0; }
+    int i = labelsFind(key);
+    if (i >= 0) {                                    // keep labels for buttons not in this form
+      for (int o = 1; o < OUT_COUNT; o++) if (!linkWeb->hasArg(OUT_NAME[o])) ls.lab[o] = labelDb[i].lab[o];
+      labelDb[i] = ls;
+    } else if (any) labelDb.push_back(ls);
+    labelsSaveFile();
+    xSemaphoreTake(linkMux, portMAX_DELAY); applyLabels(); xSemaphoreGive(linkMux);
+    uiDirty = true;
+    linkRedirect();
+  });
+  linkWeb->on("/del", HTTP_POST, [] {
+    int i = labelsFind(lowerStr(linkWeb->arg("key")));
+    if (i >= 0) { labelDb.erase(labelDb.begin() + i); labelsSaveFile(); }
+    xSemaphoreTake(linkMux, portMAX_DELAY); applyLabels(); xSemaphoreGive(linkMux);
+    uiDirty = true;
+    linkRedirect();
+  });
+  linkWeb->on("/labels.txt", HTTP_GET, [] {
+    linkWeb->sendHeader("Content-Disposition", "attachment; filename=\"arcade-stick-labels.txt\"");
+    linkWeb->send(200, "text/plain", labelsText());
+  });
+  static String upload;
+  linkWeb->on("/labels", HTTP_POST, [] {
+    std::vector<LabelSet> db;
+    labelsParse(upload, db);
+    upload = String();
+    if (!db.empty()) {
+      labelDb = db; labelsSaveFile();
+      xSemaphoreTake(linkMux, portMAX_DELAY); applyLabels(); xSemaphoreGive(linkMux);
+      uiDirty = true;
+    }
+    linkRedirect();
+  }, [] {
+    HTTPUpload &up = linkWeb->upload();
+    if (up.status == UPLOAD_FILE_START) upload = String();
+    else if (up.status == UPLOAD_FILE_WRITE && upload.length() < 60000) upload.concat((const char *)up.buf, up.currentSize);
+  });
+  linkWeb->begin();
+}
+
+// "GET_STATUS PLAYING snes,Super Mario World (USA),crc32=1234abcd"
+// The game's name can itself contain commas, so split on the first comma
+// and on the last ",crc32=". Returns the state word (PLAYING, PAUSED,
+// CONTENTLESS) or "" if the reply isn't a status.
+String splitStatus(const String &r, String &sys, String &title) {
+  sys = ""; title = "";
+  if (!r.startsWith("GET_STATUS ")) return "";
+  String rest = r.substring(11); rest.trim();
+  int sp = rest.indexOf(' ');
+  String state = sp < 0 ? rest : rest.substring(0, sp);
+  if (sp < 0) return state;
+  rest = rest.substring(sp + 1); rest.trim();
+  int c1 = rest.indexOf(','), cc = rest.lastIndexOf(",crc32=");
+  if (c1 < 0) { title = rest; return state; }
+  sys = rest.substring(0, c1);
+  title = rest.substring(c1 + 1, cc > c1 ? cc : (int)rest.length());
+  title.trim();
+  return state;
+}
+
+void parseStatus(const String &r) {
+  String sys, title;
+  String state = splitStatus(r, sys, title);
+  xSemaphoreTake(linkMux, portMAX_DELAY);
+  String oldTitle = gameTitle; uint8_t oldState = linkState;
+  if (state == "CONTENTLESS") {
+    linkState = LS_NOGAME; gameTitle[0] = gameSys[0] = 0;
+  } else if (state == "PLAYING" || state == "PAUSED") {
+    strlcpy(gameSys, sys.c_str(), sizeof gameSys);
+    strlcpy(gameTitle, title.c_str(), sizeof gameTitle);
+    linkState = LS_GAME;
+  }
+  if (oldState != linkState || oldTitle != gameTitle) { applyLabels(); uiDirty = true; }
+  xSemaphoreGive(linkMux);
+}
+
+void linkSetState(uint8_t s) {
+  if (linkState == s) return;
+  xSemaphoreTake(linkMux, portMAX_DELAY);
+  linkState = s;
+  if (s != LS_GAME) { gameTitle[0] = gameSys[0] = 0; applyLabels(); }
+  xSemaphoreGive(linkMux);
+  uiDirty = true;
+}
+
+void linkShutdown(bool wifiOff) {
+  if (linkWeb) { linkWeb->stop(); delete linkWeb; linkWeb = nullptr; }
+  linkUdp.stop();
+  MDNS.end();
+  if (wifiOff) { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
+  raKnown = false; linkIp[0] = 0;
+}
+
+void linkTask(void *) {
+  linkStopped = false;
+  bool up = false;
+  uint32_t lastPoll = 0, lastTry = 0, misses = 0;
+  for (;;) {
+    if (linkStopReq) {                                 // a Wi-Fi update mode is taking over
+      if (up) linkShutdown(false);
+      up = false; linkStopped = true;
+      linkSetState(LS_OFF);
+      vTaskDelay(portMAX_DELAY);
+    }
+    if (!cfg.gameLink) {
+      if (up) { linkShutdown(true); up = false; }
+      linkSetState(LS_OFF);
+      vTaskDelay(pdMS_TO_TICKS(300)); continue;
+    }
+    if (!up) {
+      String ss = homeSsid();
+      if (!ss.length()) { linkSetState(LS_NOSSID); vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+      if (lastTry && millis() - lastTry < 30000) { vTaskDelay(pdMS_TO_TICKS(300)); continue; }
+      lastTry = millis();
+      linkSetState(LS_JOINING);
+      String pw = homePass();
+      WiFi.setHostname(linkHostname().c_str());        // before the interface starts
+      WiFi.mode(WIFI_STA);
+      WiFi.setSleep(true);                             // modem sleep: required alongside Bluetooth
+      WiFi.begin(ss.c_str(), pw.c_str());
+      uint32_t t0 = millis();
+      while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000 && cfg.gameLink && !linkStopReq) vTaskDelay(pdMS_TO_TICKS(200));
+      if (WiFi.status() != WL_CONNECTED) { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); linkSetState(LS_NOWIFI); continue; }
+      xSemaphoreTake(linkMux, portMAX_DELAY);
+      strlcpy(linkIp, WiFi.localIP().toString().c_str(), sizeof linkIp);
+      xSemaphoreGive(linkMux);
+      MDNS.begin(linkHostname().c_str());
+      linkUdp.begin(55356);
+      linkStartWeb();
+      up = true; misses = 0; raKnown = false;
+      linkSetState(LS_SEARCHING);
+    }
+    if (WiFi.status() != WL_CONNECTED) { linkShutdown(true); up = false; linkSetState(LS_NOWIFI); continue; }
+    linkWeb->handleClient();
+    uint32_t now = millis();
+    if (now - lastPoll > 2500) {
+      lastPoll = now;
+      IPAddress to = raKnown ? raHost : WiFi.broadcastIP();
+      linkUdp.beginPacket(to, 55355);
+      linkUdp.print("GET_STATUS\n");
+      linkUdp.endPacket();
+      misses++;
+      if (misses > 3) {                                // no answer for ~10 s
+        raKnown = false;
+        linkSetState(LS_SEARCHING);
+      }
+    }
+    int n = linkUdp.parsePacket();
+    if (n > 0) {
+      char buf[200];
+      int len = linkUdp.read(buf, sizeof buf - 1);
+      buf[len > 0 ? len : 0] = 0;
+      String r(buf); r.trim();
+      if (r.startsWith("GET_STATUS")) {
+        raHost = linkUdp.remoteIP(); raKnown = true; misses = 0;
+        parseStatus(r);
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+// stop Game link before a Wi-Fi update mode takes the radio (waits up to 1 s)
+void linkStop() {
+  linkStopReq = true;
+  for (int i = 0; i < 50 && !linkStopped; i++) delay(20);
+}
+
 void openMenu() {
   menuOpen = true;
   forceSend = true;
@@ -1975,7 +2518,7 @@ void closeMenu() {
 
 void cycle(uint8_t &v, int dir, int count) { v = (v + dir + count) % count; settingsDirty = true; }
 // new game or fighter: clear counts and show the Moves page when the menu closes
-void resetMoves() { memset(moveCount, 0, sizeof moveCount); moveHit = -1; motion.clear(); cfg.page = PG_MOVES; }
+void resetMoves() { memset(moveCount, 0, sizeof moveCount); moveHit = -1; motion.clear(); cfg.page = PG_MOVES; trainReset(); }
 
 void menuChange(int dir) {
   switch (menuIndex) {
@@ -1987,6 +2530,7 @@ void menuChange(int dir) {
     }
     case M_STICK:   cycle(cfg.stickMode, dir, SM_COUNT); break;
     case M_CONN:    cycle(cfg.conn, dir, 2); break;
+    case M_GAMELINK: cycle(cfg.gameLink, dir, 2); break;
     case M_BRIGHT:  cfg.brightness = constrain(cfg.brightness + dir * 10, 10, 100);
                     settingsDirty = true; applyDisplaySettings(); break;
     case M_FLIP:    cycle(cfg.flip, dir, 2); applyDisplaySettings(); break;
@@ -2002,6 +2546,8 @@ void menuChange(int dir) {
     case M_GAME:    cycle(cfg.game, dir, GAME_COUNT); cfg.fighter = 0; resetMoves(); break;
     case M_FIGHTER: cycle(cfg.fighter, dir, GAMES[cfg.game].n); resetMoves(); break;
     case M_MOVECHECK: cfg.moveCheck = constrain(cfg.moveCheck + dir, 0, 2); settingsDirty = true; break;
+    case M_TRAINER:   cfg.trainer = constrain(cfg.trainer + dir, 0, 2); settingsDirty = true; trainReset();
+                      if (cfg.trainer) cfg.page = PG_MOVES; break;
     default: return;
   }
   playSound(SND_CHANGE);                   // also previews the new sound level
@@ -2230,6 +2776,7 @@ void handleLayerEvents() {
     memset(moveCount, 0, sizeof moveCount);
     moveHit = -1;
     motion.clear();
+    trainReset();
     toast(GAMES[cfg.game].fighters[cfg.fighter].name);
   }
   settingsDirty = true;
@@ -2250,7 +2797,7 @@ void setScreenPower(uint8_t p) {
 }
 
 void uiTask(void *) {
-  uint32_t lastFrame = 0, lastIdle = 0, lastBatt = 0, seenHit = 0;
+  uint32_t lastFrame = 0, lastIdle = 0, lastBatt = 0, seenHit = 0, seenTrain = 0;
   int lastBattPct = -2;
   for (;;) {
     uiStep();
@@ -2270,6 +2817,18 @@ void uiTask(void *) {
       if (h >= 0 && h < 8 && moveCount[h] < 999) moveCount[h]++;
       if (cfg.moveCheck == 2) playSound(SND_COMBO);
     }
+    // trainer: cheer a hit, and after 3 in a row move on to the next move
+    uint32_t ts = trainSeq;
+    if (ts != seenTrain) {
+      seenTrain = ts;
+      if (cfg.trainer == 2 && trainRes.code == CO_OK) playSound(trainStreak >= 3 ? SND_SAVED : SND_COMBO);
+    }
+    if (cfg.trainer && trainStreak >= 3 && now - trainAt > 1500) {
+      const Fighter &f = GAMES[cfg.game].fighters[cfg.fighter];
+      trainIdx = trainNext(f, trainIdx); trainStreak = 0; trainRes = {CO_NONE, 0, 0, false};
+      uiDirty = true;
+    }
+    if (cfg.trainer && cfg.page == PG_MOVES && trainAt && now - trainAt < 2600) uiDirty = true;
 
     // idle: dim + attract mode after 30 s, screen off after the Screen sleep time
     uint32_t idle = now - uiInputTime;
@@ -2284,6 +2843,23 @@ void uiTask(void *) {
     uint32_t aoff = (uint32_t)AUTOOFF_MIN[cfg.autoOff] * 60000UL;
     if (aoff && onStatus && batteryPercent() >= 0 &&
         ((idle > aoff && !hostConnected()) || idle > 3600000UL)) powerOffRequest = true;
+
+    // Bluetooth timing: the library asks for 7.5-8.75 ms when the host connects.
+    // Check what the host agreed to; if it's slower, ask once more.
+    static uint32_t lastLink = 0, connAt = 0; static bool reasked = false;
+    if (bootConn == C_BLE && !radioOff && now - lastLink > 1000) {
+      lastLink = now;
+      NimBLEServer *sv = NimBLEDevice::getServer();
+      if (sv && sv->getConnectedCount()) {
+        NimBLEConnInfo ci = sv->getPeerInfo(0);
+        btIntervalX100 = ci.getConnInterval() * 125;          // units of 1.25 ms
+        if (!connAt) connAt = now;
+        if (!reasked && ci.getConnInterval() > 8 && now - connAt > 4000) {
+          sv->updateConnParams(ci.getConnHandle(), 6, 7, 0, 600);
+          reasked = true;
+        }
+      } else { btIntervalX100 = 0; connAt = 0; reasked = false; }
+    }
 
     // battery level to the host (shows in SteamOS next to the controller)
     if (bootConn == C_BLE && !radioOff && now - lastBatt > 30000) {
@@ -2362,6 +2938,7 @@ void loadIdentity() {
 // ======================= SETUP / LOOP ===============================
 void setup() {
   loadSettings();
+  trainReset();
   loadIdentity();
   applyWiring();
   applyTheme();
@@ -2428,6 +3005,11 @@ void setup() {
   debugSerial.printf("Build %s\n", STICK_ID);
 
   xTaskCreatePinnedToCore(uiTask, "ui", 8192, nullptr, 1, nullptr, 0);
+
+  // Game link (RetroArch game detection + labels)
+  linkMux = xSemaphoreCreateMutex();
+  labelsLoad();
+  xTaskCreatePinnedToCore(linkTask, "link", 10240, nullptr, 1, nullptr, 0);
 }
 
 void loop() {

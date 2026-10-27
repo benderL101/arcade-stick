@@ -1,4 +1,4 @@
-# Arcade Stick Firmware v2.4
+# Arcade Stick Firmware v2.5
 
 Firmware for the DIY arcade stick: Freenove ESP32-S3 2.8" display (FNK0104) + MCP23017 expander.
 
@@ -73,7 +73,7 @@ The directions are where the stick is **pushed**, as the player sees it. Check t
 
 ### Setting up a new stick
 
-1. Wire it to the standard wiring and flash `ArcadeStick_v2.4_usb.bin` (see Flashing below).
+1. Wire it to the standard wiring and flash `ArcadeStick_v2.5_usb.bin` (see Flashing below).
 2. **Menu → Colour**: pick its colour (Blue, Red, Green, Yellow, Orange, Purple, Pink or White). The colour sets the screen accent, the name ("**Arcade Stick Green**") in Bluetooth pairing and over USB, and its Wi-Fi name. The stick restarts when you leave the menu so the new name takes effect.
 3. **Menu → Player**: set P1, P2, P3 or P4.
 4. Pair it with the handheld.
@@ -88,8 +88,8 @@ The directions are where the stick is **pushed**, as the player sees it. Check t
 
 | File | Use it for |
 |---|---|
-| `ArcadeStick_v2.4_usb.bin` | Flashing over the USB cable (address 0x0) |
-| `ArcadeStick_v2.4_wifi.bin` | **Menu → Wi-Fi update** (no cable) |
+| `ArcadeStick_v2.5_usb.bin` | Flashing over the USB cable (address 0x0) |
+| `ArcadeStick_v2.5_wifi.bin` | **Menu → Wi-Fi update** (no cable) |
 
 The same files work on every stick. (Releases also carry `_red_wifi.bin` and `_blue_wifi.bin` copies of the Wi-Fi file, only so sticks still on v2.3 can find the update.)
 
@@ -137,7 +137,7 @@ Once v1.6 is on the stick, you never need the BOOT button again:
 1. In **Chrome or Edge** on a computer, open **https://espressif.github.io/esptool-js/**.
 2. Plug in the Freenove board. Hold **BOOT**, tap **RESET**, then release BOOT.
 3. Click **Connect** and pick the board's port.
-4. Set Flash Address **0x0**, choose `ArcadeStick_v2.4_usb.bin`, then click **Program**.
+4. Set Flash Address **0x0**, choose `ArcadeStick_v2.5_usb.bin`, then click **Program**.
 5. When it finishes, tap **RESET**.
 
 ### Option B: Arduino IDE (to edit the code)
@@ -253,6 +253,44 @@ For the button names to match the game, set up RetroArch's controls for that cor
 
 The inputs come from published move lists (arcade versions). The Alpha 3 list covers the characters in the source I could verify; more fighters and games (Tekken, Ultimate MK3, MK4, Street Fighter III, King of Fighters) can be added to `moves.h` as move lists are checked.
 
+### Combo trainer (v2.5)
+
+**Menu → Trainer → On** turns the Moves page into practice mode. It shows one move at a time for the fighter you picked, and tells you what happened on every try:
+
+| You see | What it means |
+|---|---|
+| **Got it!** | Done right. Three in a row and it moves on to the next move. |
+| **Right motion, wrong button** | The stick movement was right; check the button chip. |
+| **Missed a direction: ↘** | That step of the motion didn't happen. |
+| **Too slow** | All the steps were there, but too spread out. Roll it in one smooth movement. |
+| **Button too late** | Press the button as you finish the motion. |
+| **Hold back longer** | Charge moves: hold back (or down) about 1 second first. |
+| **Go all the way round** | 360 moves need a full circle. |
+| **Tap faster** | Rapid-press moves need 3 quick presses. |
+
+It works facing either way. "On + sound" plays the jingle on each hit. Change fighter in the menu or with **SELECT + START**.
+
+### Game link: button labels for the game you're playing (v2.5)
+
+With Game link on, the stick asks RetroArch which game is running and shows what each button does in that game, like **Shoot/Block** and **Pass/Steal** for NBA Jam, right on the buttons on screen.
+
+**Set up once:**
+1. Save your home Wi-Fi on the stick (see *Check for update* above).
+2. On the Legion Go S, in RetroArch: **Settings → Network → Network Commands → On** (port 55355, the default).
+3. On the stick: **Menu → Game link → On**. The menu line shows how it's going: *joining Wi-Fi*, *no RetroArch*, *connected*.
+
+**Adding labels for a game:**
+1. Start the game in RetroArch. The Buttons page shows its name and a web address, e.g. **http://192.168.1.23**.
+2. Open that address on your phone (same home Wi-Fi). It shows the game that's running and a box for each button.
+3. Type what each button does (short: two lines of about 6 letters, split with "/", e.g. *Shoot/Block*) and press **Save**. The stick shows them straight away and remembers them for next time.
+4. Tick **Use these for every <system> game** to set labels for a whole system (e.g. all SNES games) when a game has none of its own.
+
+Labels follow the button RetroArch sees (A, B, X...), so they stay right if you change profile. The page also lists saved games (edit or delete) and can **Download / Load** the labels file to copy them to another stick.
+
+Notes:
+- Game link keeps Wi-Fi on alongside Bluetooth while you play, which uses a bit more battery. Turn it off in the menu if you notice any lag.
+- If the stick says *no RetroArch*, check Network Commands is on and the Legion Go S is on the same Wi-Fi.
+
 ### Screen sleep, attract mode and auto power off
 
 - After **30 seconds** without input, the screen dims to a retro attract screen. Any press wakes it.
@@ -314,7 +352,9 @@ Stick up/down moves, stick left/right changes a value, **B4** selects, **HOME** 
 | Game | Which game the Moves page shows |
 | Fighter | Which fighter the Moves page shows |
 | Move check | Off, On (no sound) or On + sound: lights up moves you pull off |
+| Trainer | Off, On (no sound) or On + sound: practise one move at a time with tips (see *Combo trainer*) |
 | Connection | USB or Bluetooth. The stick restarts into the new mode. |
+| Game link | Shows the running game's button labels (see *Game link*). The value shows its status. |
 | Forget BT pairings | Clears saved Bluetooth devices (Bluetooth mode only) |
 | Brightness | 10–100 % |
 | Screen sleep | Screen off after Never / 1 / 3 / 5 / 10 min idle |
@@ -326,7 +366,7 @@ Stick up/down moves, stick left/right changes a value, **B4** selects, **HOME** 
 | Left + Right | What happens if left and right are pressed together: Cancel out or Last wins. A lever can't do this, so it only matters on a leverless build. |
 | Wiring | **Standard** for every stick wired to the table in section 1; **Old red stick** for the original red stick. Takes effect straight away. |
 | Flip screen | Rotates 180° if the screen is mounted the other way round |
-| Input test | Shows every input and its MCP pin. **Hold HOME for 2 s** to leave. |
+| Input test | Shows every input and its MCP pin, and the Bluetooth link speed the handheld agreed to (7.5 ms is the fastest). **Hold HOME for 2 s** to leave. |
 | Check for update | Checks GitHub for newer firmware over your home Wi-Fi and installs it if you say so. |
 | USB update | Restarts into flash mode for a USB firmware update, no case opening needed. |
 | Wi-Fi update | Update firmware, copy settings, or save your home Wi-Fi (for Check for update) from a phone. |
