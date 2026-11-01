@@ -25,6 +25,7 @@ Firmware for Ben's DIY Bluetooth arcade sticks (a blue one, a red one, and more 
 Pin maps are in `src/main.cpp`:
 - `MCP_BIT_STD[]`: the **standard wiring** (the blue stick's). Every new stick is wired to this.
 - `MCP_BIT_RED[]`: the original red stick, picked with **Menu → Wiring → Old red stick**.
+- `mcpBitCustom[]`: learned on the stick with **Menu → Set up buttons** (`S_LEARN`, `stepLearn()`, which reads the raw pins in `rawNow`). Saved as NVS key `map` in namespace `stick`, checked by `validWiring()`. `MCP_NONE` (bit 7) marks an EX that isn't fitted. **Wiring → Custom** is only offered once `customOk` is true.
 
 Both reflect how real sticks are **actually wired**, so never "tidy" them. START, SELECT and HOME are on the same pins in both, so the menu always opens. `MCP_BIT` / `PHYS_PIN` are pointers set by `applyWiring()`.
 

@@ -1,4 +1,4 @@
-# Arcade Stick Firmware v2.5
+# Arcade Stick Firmware v2.6
 
 Firmware for the DIY arcade stick: Freenove ESP32-S3 2.8" display (FNK0104) + MCP23017 expander.
 
@@ -73,10 +73,12 @@ The directions are where the stick is **pushed**, as the player sees it. Check t
 
 ### Setting up a new stick
 
-1. Wire it to the standard wiring and flash `ArcadeStick_v2.5_usb.bin` (see Flashing below).
+1. Wire it to the standard wiring and flash `ArcadeStick_v2.6_usb.bin` (see Flashing below).
 2. **Menu → Colour**: pick its colour (Blue, Red, Green, Yellow, Orange, Purple, Pink or White). The colour sets the screen accent, the name ("**Arcade Stick Green**") in Bluetooth pairing and over USB, and its Wi-Fi name. The stick restarts when you leave the menu so the new name takes effect.
 3. **Menu → Player**: set P1, P2, P3 or P4.
 4. Pair it with the handheld.
+
+**A stick wired another way?** You don't have to rewire it. Open **Menu → Set up buttons** and press each input when the screen asks for it (section 3).
 
 **Joystick tip:** a stick's switches sit opposite the direction you push, so its harness colours don't always match. After wiring, open **Menu → Input test** and push each direction. If one shows the wrong name, swap those two wires.
 
@@ -88,8 +90,8 @@ The directions are where the stick is **pushed**, as the player sees it. Check t
 
 | File | Use it for |
 |---|---|
-| `ArcadeStick_v2.5_usb.bin` | Flashing over the USB cable (address 0x0) |
-| `ArcadeStick_v2.5_wifi.bin` | **Menu → Wi-Fi update** (no cable) |
+| `ArcadeStick_v2.6_usb.bin` | Flashing over the USB cable (address 0x0) |
+| `ArcadeStick_v2.6_wifi.bin` | **Menu → Wi-Fi update** (no cable) |
 
 The same files work on every stick. (Releases also carry `_red_wifi.bin` and `_blue_wifi.bin` copies of the Wi-Fi file, only so sticks still on v2.3 can find the update.)
 
@@ -137,7 +139,7 @@ Once v1.6 is on the stick, you never need the BOOT button again:
 1. In **Chrome or Edge** on a computer, open **https://espressif.github.io/esptool-js/**.
 2. Plug in the Freenove board. Hold **BOOT**, tap **RESET**, then release BOOT.
 3. Click **Connect** and pick the board's port.
-4. Set Flash Address **0x0**, choose `ArcadeStick_v2.5_usb.bin`, then click **Program**.
+4. Set Flash Address **0x0**, choose `ArcadeStick_v2.6_usb.bin`, then click **Program**.
 5. When it finishes, tap **RESET**.
 
 ### Option B: Arduino IDE (to edit the code)
@@ -364,7 +366,8 @@ Stick up/down moves, stick left/right changes a value, **B4** selects, **HOME** 
 | Colour | The stick's colour: Blue, Red, Green, Yellow, Orange, Purple, Pink or White. Sets the screen accent and the name in Bluetooth, USB and Wi-Fi ("Arcade Stick Green"). The stick restarts when you leave the menu if it changed. |
 | Player | P1 to P4, shown on the screen. The host decides the real player order: connect P1 first. |
 | Left + Right | What happens if left and right are pressed together: Cancel out or Last wins. A lever can't do this, so it only matters on a leverless build. |
-| Wiring | **Standard** for every stick wired to the table in section 1; **Old red stick** for the original red stick. Takes effect straight away. |
+| Wiring | **Standard** for every stick wired to the table in section 1; **Old red stick** for the original red stick; **Custom** for a stick you've set up yourself (it appears after you use **Set up buttons**). Takes effect straight away. |
+| Set up buttons | For a stick wired its own way. The screen asks for each input in turn: Up, Down, Left, Right, Start, Select, Home, B1 to B6, then EX (press START to skip it if there isn't one). Then press **START** to save, **SELECT** to start again or **HOME** to cancel. Pressing nothing for 30 s also cancels and keeps the old wiring. Saved wiring stays on this stick through updates and isn't copied with the settings file. Check it afterwards with **Input test**. |
 | Flip screen | Rotates 180° if the screen is mounted the other way round |
 | Input test | Shows every input and its MCP pin, and the Bluetooth link speed the handheld agreed to (7.5 ms is the fastest). **Hold HOME for 2 s** to leave. |
 | Check for update | Checks GitHub for newer firmware over your home Wi-Fi and installs it if you say so. |

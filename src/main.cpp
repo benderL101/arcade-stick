@@ -1,6 +1,6 @@
 /*
  * =====================================================================
- *  DIY ARCADE STICK FIRMWARE  v2.5
+ *  DIY ARCADE STICK FIRMWARE  v2.6
  *  One firmware for every stick: the colour (and so the Bluetooth name)
  *  and the wiring are chosen in the stick's own menu.
  *  Freenove ESP32-S3 2.8" Display (FNK0104, non-touch)
@@ -95,7 +95,7 @@
 const char *COLOUR_NAME[COLOUR_COUNT] = {"Blue", "Red", "Green", "Yellow", "Orange", "Purple", "Pink", "White"};
 const uint16_t COLOUR_RGB[COLOUR_COUNT] = {0x2B7F, 0xE145, 0x3E4B, 0xFE60, 0xFC40, 0xAA9C, 0xF8B6, 0xE73C};
 #define DEFAULT_PLAYER    0        // P1
-#define FW_VERSION  "2.5"
+#define FW_VERSION  "2.6"
 #define UPDATE_REPO "benderL101/arcade-stick"   // GitHub repo the stick checks for new releases
 
 // Power off: hold START this long. While off the board naps and checks
@@ -114,11 +114,12 @@ enum Phys : uint8_t {
 // MCP23017 pin for each input. GPA0-6 = bits 0-6, GPB0-6 = bits 8-14.
 // GPA7 and GPB7 are NOT used: on current MCP23017 silicon they are
 // output-only (Microchip datasheet rev. D+).
-// Two wirings, picked in Menu -> Wiring:
+// Wirings, picked in Menu -> Wiring:
 //  Standard: the blue stick's wiring. Wire every new stick like this.
 //  Old red:  the original red stick, so it works without rewiring.
-enum Wiring : uint8_t { W_STANDARD, W_OLD_RED, W_COUNT };
-const char *WIRING_NAME[W_COUNT] = {"Standard", "Old red stick"};
+//  Custom:   learned on the stick with Menu -> Set up buttons.
+enum Wiring : uint8_t { W_STANDARD, W_OLD_RED, W_CUSTOM, W_COUNT };
+const char *WIRING_NAME[W_COUNT] = {"Standard", "Old red stick", "Custom"};
 const uint8_t MCP_BIT_STD[PHYS_COUNT] = {
   3, 2, 0, 1,                 // Up = GPA3, Down = GPA2, Left = GPA0, Right = GPA1
   5, 6, 4,                    // Start = GPA5, Select = GPA6, Home = GPA4
@@ -139,20 +140,48 @@ const char *PHYS_PIN_RED[PHYS_COUNT] = {
   "GPA0", "GPA1", "GPA2", "GPA3", "GPA5", "GPA6", "GPA4",
   "GPB1", "GPB3", "GPB0", "GPB6", "GPB4", "GPB5", "GPB2"
 };
-// START, SELECT and HOME are on the same pins in both wirings
+// START, SELECT and HOME are on the same pins in both built-in wirings
+#define MCP_NONE 7            // a learned EX that isn't fitted: this bit never reads as pressed
+uint8_t mcpBitCustom[PHYS_COUNT];
+bool customOk = false;        // mcpBitCustom holds a usable learned wiring
+char physPinText[PHYS_COUNT][6];
+const char *physPinCustom[PHYS_COUNT];
 const uint8_t *MCP_BIT = MCP_BIT_STD;
 const char **PHYS_PIN = PHYS_PIN_STD;
 
 // This stick's identity, kept on the stick (not in the settings file)
 uint8_t stickWiring = W_STANDARD, stickColour = 0, bootColour = 0;
 String deviceName() { return String("Arcade Stick ") + COLOUR_NAME[stickColour]; }
+// Every input on its own real pin; only EX may be left out
+bool validWiring(const uint8_t *m) {
+  uint16_t used = 0;
+  for (uint8_t p = 0; p < PHYS_COUNT; p++) {
+    if (p == P_EX && m[p] == MCP_NONE) continue;
+    if (m[p] > 14 || m[p] == MCP_NONE || (used & (1u << m[p]))) return false;
+    used |= 1u << m[p];
+  }
+  return true;
+}
 void applyWiring() {
+  if (stickWiring == W_CUSTOM && customOk) {
+    for (uint8_t p = 0; p < PHYS_COUNT; p++) {
+      uint8_t b = mcpBitCustom[p];
+      if (b == MCP_NONE) strcpy(physPinText[p], "-");
+      else snprintf(physPinText[p], sizeof physPinText[p], "GP%c%d", b < 8 ? 'A' : 'B', b & 7);
+      physPinCustom[p] = physPinText[p];
+    }
+    MCP_BIT = mcpBitCustom;
+    PHYS_PIN = physPinCustom;
+    return;
+  }
   MCP_BIT = stickWiring == W_OLD_RED ? MCP_BIT_RED : MCP_BIT_STD;
   PHYS_PIN = stickWiring == W_OLD_RED ? PHYS_PIN_RED : PHYS_PIN_STD;
 }
 void saveIdentity() {
   Preferences n; n.begin("stick", false);
-  n.putUChar("wiring", stickWiring); n.putUChar("colour", stickColour); n.end();
+  n.putUChar("wiring", stickWiring); n.putUChar("colour", stickColour);
+  if (customOk) n.putBytes("map", mcpBitCustom, PHYS_COUNT);
+  n.end();
 }
 const char *PHYS_NAME[PHYS_COUNT] = {
   "Up", "Down", "Left", "Right", "Start", "Select", "Home",
@@ -476,16 +505,19 @@ uint32_t lockUntil[PHYS_COUNT] = {0};
 uint32_t homeDownAt = 0;
 bool homeEligible = false;           // Home press began outside the menu
 uint32_t homePulseUntil = 0;
+volatile uint16_t rawNow = 0;        // MCP pins as read, 1 = pressed (for Set up buttons)
 
 void scanInputs() {
   uint16_t raw;
   if (!mcpRead(raw)) {
+    rawNow = 0;
     if (mcpOk) { mcpOk = false; uiDirty = true; }
     static uint32_t lastRetry = 0;
     if (millis() - lastRetry > 1000) { lastRetry = millis(); if (mcpInit()) { mcpOk = true; uiDirty = true; } }
     return;
   }
   if (!mcpOk) { mcpOk = true; uiDirty = true; }
+  rawNow = raw;
 
   uint32_t now = millis();
   uint16_t state = physState;
@@ -940,7 +972,7 @@ void soundShutdown(uint32_t maxMs) {
 }
 
 // ======================= UI =========================================
-enum Screen : uint8_t { S_STATUS, S_MENU, S_REMAP, S_TURBO, S_TEST, S_MESSAGE, S_UPDATE, S_WIFI, S_ONLINE };
+enum Screen : uint8_t { S_STATUS, S_MENU, S_REMAP, S_TURBO, S_TEST, S_MESSAGE, S_UPDATE, S_WIFI, S_ONLINE, S_LEARN };
 Screen screen = S_STATUS;
 int menuIndex = 0;
 int remapSel = 0;                    // which action button is being edited
@@ -948,12 +980,35 @@ bool settingsDirty = false;
 const char *messageText = "";
 uint32_t messageUntil = 0;
 
+// Set up buttons: press each input in turn to learn a stick's wiring.
+// Reads the raw pins, so it works however the stick is wired.
+struct Learn {
+  uint8_t step;                      // input being asked for; PHYS_COUNT = all done
+  uint8_t map[PHYS_COUNT];
+  uint16_t used;                     // pins already taken
+  bool waitRelease;                  // everything must be let go before the next press
+  bool leaving, save;                // finished: wait for release, then back to the menu
+  uint32_t lastPressAt, lastHeldAt;
+} learn;
+const char *LEARN_NAME[PHYS_COUNT] = {"UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT", "HOME",
+                                      "B1", "B2", "B3", "B4", "B5", "B6", "EX"};
+const char *LEARN_WHERE[PHYS_COUNT] = {
+  "Push the stick up and let go", "Push the stick down and let go",
+  "Push the stick left and let go", "Push the stick right and let go",
+  "", "", "",
+  "Top row, left", "Top row, middle", "Top row, right",
+  "Bottom row, left", "Bottom row, middle", "Bottom row, right",
+  "The 7th button. None? Press START to skip"
+};
+#define LEARN_TIMEOUT_MS 30000
+#define LEARN_RELEASE_MS 50          // let go for this long, so switch bounce isn't a second press
+
 enum MenuItem { M_PROFILE, M_REMAP, M_TURBO, M_STICK, M_GAME, M_FIGHTER, M_MOVECHECK, M_TRAINER, M_CONN, M_GAMELINK, M_FORGET, M_BRIGHT, M_SLEEP, M_AUTOOFF,
-                M_SOUND, M_CLICKS, M_COLOUR, M_PLAYER, M_SOCD, M_FLIP, M_WIRING, M_TEST, M_ONLINE, M_UPDATE, M_WIFI, M_EXIT, M_COUNT };
+                M_SOUND, M_CLICKS, M_COLOUR, M_PLAYER, M_SOCD, M_FLIP, M_WIRING, M_LEARN, M_TEST, M_ONLINE, M_UPDATE, M_WIFI, M_EXIT, M_COUNT };
 const char *MENU_LABEL[M_COUNT] = {
   "Profile", "Remap buttons", "Turbo", "Stick", "Game", "Fighter", "Move check", "Trainer", "Connection", "Game link",
   "Forget BT pairings", "Brightness", "Screen sleep", "Auto power off", "Sound", "Button clicks",
-  "Colour", "Player", "Left + Right", "Flip screen", "Wiring", "Input test", "Check for update", "USB update", "Wi-Fi update", "Save & exit"
+  "Colour", "Player", "Left + Right", "Flip screen", "Wiring", "Set up buttons", "Input test", "Check for update", "USB update", "Wi-Fi update", "Save & exit"
 };
 
 // colours (RGB565)
@@ -1495,7 +1550,7 @@ void menuValue(int item, char *buf, size_t n) {
     case M_FIGHTER: snprintf(buf, n, "< %s >", GAMES[cfg.game].fighters[cfg.fighter].name); break;
     case M_MOVECHECK: snprintf(buf, n, "< %s >", cfg.moveCheck == 0 ? "Off" : (cfg.moveCheck == 1 ? "On, no sound" : "On + sound")); break;
     case M_TRAINER:   snprintf(buf, n, "< %s >", cfg.trainer == 0 ? "Off" : (cfg.trainer == 1 ? "On, no sound" : "On + sound")); break;
-    case M_REMAP: case M_TURBO: case M_TEST: case M_ONLINE: case M_UPDATE: case M_WIFI: snprintf(buf, n, ">"); break;
+    case M_REMAP: case M_TURBO: case M_LEARN: case M_TEST: case M_ONLINE: case M_UPDATE: case M_WIFI: snprintf(buf, n, ">"); break;
     default: break;
   }
 }
@@ -1642,6 +1697,37 @@ void drawUpdate(LGFX_Sprite &g) {
   drawFooterHint(g, "B4: go to flash mode   HOME: back");
 }
 
+void drawLearn(LGFX_Sprite &g) {
+  drawHeader(g, "SET UP BUTTONS");
+  g.setTextDatum(middle_center);
+  if (learn.step >= PHYS_COUNT) {
+    g.setFont(&fonts::FreeSansBold12pt7b);
+    g.setTextColor(C_OK);
+    g.drawString("All buttons set", 160, 84);
+    g.setFont(&fonts::Font2);
+    g.setTextColor(C_TEXT);
+    g.drawString("START:  save", 160, 128);
+    g.drawString("SELECT:  start again", 160, 150);
+    drawFooterHint(g, "HOME: cancel, keep the old wiring");
+    return;
+  }
+  char buf[16];
+  snprintf(buf, sizeof buf, "%d of %d", learn.step + 1, PHYS_COUNT);
+  g.setFont(&fonts::Font2);
+  g.setTextColor(C_DIM);
+  g.drawString(buf, 160, 44);
+  g.setFont(&fonts::FreeSansBold12pt7b);
+  g.setTextColor(C_TEXT);
+  g.drawString("Press", 160, 74);
+  g.setFont(&fonts::FreeSansBold18pt7b);
+  g.setTextColor(C_ACCENT);
+  g.drawString(LEARN_NAME[learn.step], 160, 112);
+  g.setFont(&fonts::Font2);
+  g.setTextColor(C_DIM);
+  g.drawString(LEARN_WHERE[learn.step], 160, 152);
+  drawFooterHint(g, "No press for 30 s cancels");
+}
+
 void drawMessage(LGFX_Sprite &g) {
   g.fillScreen(C_BG);
   g.setFont(&fonts::FreeSansBold12pt7b);
@@ -1666,6 +1752,7 @@ void render() {
     case S_UPDATE: drawUpdate(g); break;
     case S_WIFI: drawWifi(g); break;
     case S_ONLINE: drawOnline(g); break;
+    case S_LEARN: drawLearn(g); break;
     case S_MESSAGE: drawMessage(g); break;
   }
   g.pushSprite(0, 0);
@@ -2540,7 +2627,10 @@ void menuChange(int dir) {
     case M_SLEEP:   cycle(cfg.screenSleep, dir, SLEEP_COUNT); break;
     case M_AUTOOFF: cycle(cfg.autoOff, dir, AUTOOFF_COUNT); break;
     case M_COLOUR:  stickColour = (stickColour + dir + COLOUR_COUNT) % COLOUR_COUNT; applyTheme(); saveIdentity(); break;
-    case M_WIRING:  stickWiring = (stickWiring + dir + W_COUNT) % W_COUNT; applyWiring(); saveIdentity(); break;
+    case M_WIRING: {                       // Custom is only offered once it has been set up
+      int count = customOk ? W_COUNT : W_CUSTOM;
+      stickWiring = (stickWiring + dir + count) % count; applyWiring(); saveIdentity(); break;
+    }
     case M_PLAYER:  cycle(cfg.player, dir, 4); break;
     case M_SOCD:    cycle(cfg.socd, dir, SOCD_COUNT); break;
     case M_GAME:    cycle(cfg.game, dir, GAME_COUNT); cfg.fighter = 0; resetMoves(); break;
@@ -2553,6 +2643,16 @@ void menuChange(int dir) {
   playSound(SND_CHANGE);                   // also previews the new sound level
 }
 
+void learnStart() {
+  learn.step = 0;
+  learn.used = 0;
+  learn.waitRelease = true;
+  learn.leaving = learn.save = false;
+  learn.lastPressAt = learn.lastHeldAt = millis();
+  screen = S_LEARN;
+  playSound(SND_SELECT);
+}
+
 void menuSelect() {
   switch (menuIndex) {
     case M_REMAP:
@@ -2561,6 +2661,7 @@ void menuSelect() {
       cfg.profile = PROFILE_CUSTOM; settingsDirty = true;
       remapSel = 0; screen = S_REMAP; playSound(SND_SELECT); break;
     case M_TURBO: screen = S_TURBO; playSound(SND_SELECT); break;
+    case M_LEARN: learnStart(); break;
     case M_TEST: screen = S_TEST; playSound(SND_SELECT); break;
     case M_UPDATE: screen = S_UPDATE; playSound(SND_SELECT); break;
     case M_WIFI: screen = S_WIFI; playSound(SND_SELECT); break;
@@ -2645,8 +2746,59 @@ void powerOff() {
   }
 }
 
+// Set up buttons: one press per input, read from the raw pins. menuOpen is
+// still set from the menu, so the host sees nothing while this runs.
+void stepLearn() {
+  uint16_t raw = rawNow;
+  uint32_t now = millis();
+  if (raw) learn.lastHeldAt = now;
+  bool released = now - learn.lastHeldAt >= LEARN_RELEASE_MS;
+
+  if (learn.leaving) {                     // wait, so the new wiring doesn't see START as a fresh press
+    if (!released) return;
+    if (learn.save) {
+      memcpy(mcpBitCustom, learn.map, PHYS_COUNT);
+      customOk = true;
+      stickWiring = W_CUSTOM;
+      applyWiring();
+      saveIdentity();
+    }
+    takeEdges();
+    screen = S_MENU;
+    uiDirty = true;
+    return;
+  }
+  if (learn.waitRelease) {
+    if (released) learn.waitRelease = false;
+  } else if (raw) {
+    uint8_t b = __builtin_ctz(raw);
+    learn.waitRelease = true;
+    learn.lastPressAt = now;
+    if (learn.step >= PHYS_COUNT) {
+      if (b == learn.map[P_START]) { learn.leaving = learn.save = true; playSound(SND_SAVED); }
+      else if (b == learn.map[P_SELECT]) learnStart();
+      else if (b == learn.map[P_HOME]) { learn.leaving = true; playSound(SND_BACK); }
+    } else if (learn.step == P_EX && b == learn.map[P_START]) {  // no 7th button
+      learn.map[learn.step++] = MCP_NONE;
+      playSound(SND_SELECT);
+    } else if (learn.used & (1u << b)) {
+      playSound(SND_ERROR);                // that pin is already taken
+    } else {
+      learn.map[learn.step++] = b;
+      learn.used |= 1u << b;
+      playSound(SND_SELECT);
+    }
+    uiDirty = true;
+  }
+  if (learn.step < PHYS_COUNT && now - learn.lastPressAt > LEARN_TIMEOUT_MS) {   // nothing pressed: keep the old wiring
+    playSound(SND_BACK);
+    learn.leaving = true;
+  }
+}
+
 void uiStep() {
   if (powerOffRequest) { powerOffRequest = false; powerOff(); }
+  if (screen == S_LEARN) { takeEdges(); stepLearn(); return; }
   if (menuRequest) { menuRequest = false; openMenu(); uiDirty = true; }
   if (screen == S_MESSAGE) {
     if (messageUntil && (int32_t)(millis() - messageUntil) >= 0) { screen = S_MENU; uiDirty = true; }
@@ -2671,7 +2823,7 @@ void uiStep() {
       if (up)   { menuIndex = (menuIndex + M_COUNT - 1) % M_COUNT; playSound(SND_MOVE); }
       if (down) { menuIndex = (menuIndex + 1) % M_COUNT; playSound(SND_MOVE); }
       if (left) menuChange(-1);
-      if (right) { if (menuIndex == M_REMAP || menuIndex == M_TURBO || menuIndex == M_TEST || menuIndex == M_ONLINE || menuIndex == M_UPDATE || menuIndex == M_WIFI) menuSelect(); else menuChange(+1); }
+      if (right) { if (menuIndex == M_REMAP || menuIndex == M_TURBO || menuIndex == M_LEARN || menuIndex == M_TEST || menuIndex == M_ONLINE || menuIndex == M_UPDATE || menuIndex == M_WIFI) menuSelect(); else menuChange(+1); }
       if (e & (1u << P_B4)) menuSelect();
       if (e & (1u << P_START)) { menuIndex = M_EXIT; menuSelect(); }
       if (home || (e & (1u << P_B5))) closeMenu();
@@ -2924,6 +3076,10 @@ void loadIdentity() {
   Preferences n; n.begin("stick", true);
   bool have = n.isKey("wiring");
   if (have) { stickWiring = n.getUChar("wiring", W_STANDARD); stickColour = n.getUChar("colour", 0); }
+  if (n.isKey("map") && n.getBytesLength("map") == PHYS_COUNT) {
+    n.getBytes("map", mcpBitCustom, PHYS_COUNT);
+    customOk = validWiring(mcpBitCustom);
+  }
   n.end();
   if (!have) {
     OldBuild ob = scanOldFirmware();
@@ -2931,7 +3087,7 @@ void loadIdentity() {
     stickColour = ob == OB_RED ? 1 : 0;                        // Red : Blue
     saveIdentity();
   }
-  if (stickWiring >= W_COUNT) stickWiring = W_STANDARD;
+  if (stickWiring >= W_COUNT || (stickWiring == W_CUSTOM && !customOk)) stickWiring = W_STANDARD;
   if (stickColour >= COLOUR_COUNT) stickColour = 0;
 }
 
