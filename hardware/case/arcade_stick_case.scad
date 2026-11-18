@@ -2,7 +2,7 @@
 //  Arcade Stick case v2: Sanwa JLF + 6 x 30 mm (Vewlix) + 3 x 24 mm,
 //  Freenove FNK0104 2.8" screen, I/O board v1.0, 1S LiPo.
 //
-//  310 x 240 x 55 mm. The top prints in two halves, upside down (top
+//  300 x 227 x 55 mm. The top prints in two halves, upside down (top
 //  face on the bed), so no surface is shallower than 45 degrees and nothing
 //  needs supports. The front edge is a rounded palm rest. The base plate
 //  prints in two halves too; its seam is offset from the top's, so the
@@ -18,8 +18,8 @@ part = "assembly";
 $fn = 72;
 
 // ---------- overall shape ----------
-X0 = -95;  X1 = 215;     // left / right outside edges
-Y0 = -125; Y1 = 115;     // front (wrist side) / back: 125 mm of palm room in front of the stick
+X0 = -85;  X1 = 215;     // left / right outside edges
+Y0 = -115; Y1 = 112;     // front (wrist side) / back: 105 mm of palm room in front of the stick
 H  = 55;                 // total height
 R  = 16;                 // corner radius, seen from above
 W  = 3;                  // wall thickness
@@ -67,7 +67,7 @@ SCR_L = 85; SCR_W = 50; SCR_D = 4; SCR_PARTS = 8;
 VIS_L = 59; VIS_W = 44;          // window = lit area (59 + 2 x 0.5 margin = 60)
 VIS_X = 38.6;                    // picture centre, from the board's MIC end
 SCR_X0 = X1 - W - FIT - SCR_L;   // MIC end on the left, USB end against the right wall
-SCR_Y0 = 50;
+SCR_Y0 = 46;                     // clear of the rounded back-right corner
 USB_Y = SCR_Y0 + SCR_W / 2;      // USB-C sits about mid-edge (the slot allows +/- 3.5 mm)
 USB_Z = H - T - SCR_D - 1.6;
 // clips press on the board's corners, clear of the connectors along its long edges
@@ -86,12 +86,12 @@ IO_STANDOFF = 5;
 
 // ---------- battery bay (1S LiPo) ----------
 // 585460 LiPo (5.8 x 54 x 60 mm, 2000 mAh), front left under your palm
-BAT = [-78, -116, -20, -52];     // x0, y0, x1, y1 inside the low walls
+BAT = [-66, -108, -8, -44];      // x0, y0, x1, y1 inside the low walls
 
 // ---------- weight trays ----------
 // A heavier stick stays put on your lap. Fill these with steel washers or
 // fishing sinkers (glue or hot-glue them in).
-WEIGHTS = [[-80, -40, -30, 40], [157, -40, 200, 40]];     // x0, y0, x1, y1 inside
+WEIGHTS = [[-70, -38, -30, 40], [157, -40, 200, 40]];     // x0, y0, x1, y1 inside
 WEIGHT_H = 8;
 
 // ---------- anti-slip mat ----------
@@ -103,8 +103,8 @@ MAT_DEPTH = 1;
 
 // ---------- screws ----------
 // Base plate: M3 countersunk into 2.5 mm pilot holes (or M3 heat-set inserts: make them 4.0).
-BASE_BOSSES = [[-83, -113], [-89, 0], [-83, 103], [26, -116], [42, -116], [26, 106],
-               [42, 106], [120, 106], [175, -116], [203, -113], [206, 10], [180, 106]];
+BASE_BOSSES = [[-73, -103], [-79, 0], [-75, 100], [26, -106], [42, -106], [26, 106],
+               [42, 106], [120, 106], [175, -106], [203, -103], [206, 10], [180, 106]];
 PILOT = 2.5;
 // Splices under the top panel, across the seam (M3 x 10 pan head)
 SPLICES = [[SPLIT_X, -75], [SPLIT_X, 62]];
@@ -113,7 +113,7 @@ SPLICE_HOLES = [[-12, -4], [-12, 4], [12, -4], [12, 4]];
 PAD = 6;                          // splice pads below the panel
 // 1.75 mm filament as alignment pins across the seam
 PIN_D = 2.0; PIN_L = 6;
-PANEL_PINS = [-95, -60, -20, 20, 50, 104];
+PANEL_PINS = [-90, -60, -20, 20, 50, 104];
 WALL_PINS = [[Y0 + W / 2, 20], [Y0 + W / 2, 32], [Y1 - W / 2, 15], [Y1 - W / 2, 35]];
 
 // ---------- looks ----------
