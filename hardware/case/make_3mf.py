@@ -1,4 +1,4 @@
-"""Combines each top half and its accent into one two-colour 3MF.
+"""Combines the top and its accent into one two-colour 3MF.
 
 Each 3MF holds one object with two parts that share the same position:
 the body on filament 1 and the rings / stripes / name on filament 2.
@@ -12,7 +12,7 @@ import struct
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PAIRS = [("top_left", "accent_left"), ("top_right", "accent_right")]
+PAIRS = [("top", "accent")]
 
 
 def read_stl(path):

@@ -2,15 +2,13 @@
 //  Arcade Stick case v2: Sanwa JLF + 6 x 30 mm (Vewlix) + 3 x 24 mm,
 //  Freenove FNK0104 2.8" screen, I/O board v1.0, 1S LiPo.
 //
-//  300 x 227 x 55 mm. The top prints in two halves, upside down (top
-//  face on the bed), so no surface is shallower than 45 degrees and nothing
-//  needs supports. The front edge is a rounded palm rest. The base plate
-//  prints in two halves too; its seam is offset from the top's, so the
-//  screwed-on base ties the halves together.
+//  247 x 227 x 55 mm, so the top and the base each print in one piece on
+//  a 256 mm bed. The top prints upside down (top face on the bed), so no
+//  surface is shallower than 45 degrees and nothing needs supports. The
+//  front edge is a rounded palm rest.
 //
-//  Export one part at a time:  openscad -D 'part="top_left"' -o top_left.stl arcade_stick_case.scad
-//  Parts: top_left, top_right, accent_left, accent_right, base_left, base_right,
-//         splice, screen_clip, assembly (preview only)
+//  Export one part at a time:  openscad -D 'part="top"' -o top.stl arcade_stick_case.scad
+//  Parts: top, accent (the second colour), base, screen_clip, assembly (preview only)
 //  Origin: 10 mm behind the joystick's centre (STICK), z = 0 at the bottom of the case. +y is away from you.
 // =====================================================================
 
@@ -18,7 +16,7 @@ part = "assembly";
 $fn = 72;
 
 // ---------- overall shape ----------
-X0 = -85;  X1 = 215;     // left / right outside edges
+X0 = -75;  X1 = 172;     // left / right outside edges
 Y0 = -115; Y1 = 112;     // front (wrist side) / back: 105 mm of palm room in front of the stick
 H  = 55;                 // total height
 R  = 16;                 // corner radius, seen from above
@@ -36,10 +34,6 @@ CB = 1.5;                // small chamfer on the bottom edge
 BASE = 4;                // base plate thickness (3 mm under the anti-slip mat)
 FIT = 0.3;               // clearance for parts that slot together
 
-SPLIT_X = 34;            // where the top is cut into two printable halves
-BASE_SPLIT_X = 120;      // where the base plate is cut (offset on purpose)
-LAP = 10;                // half-lap overlap at the base seam
-
 // ---------- controls ----------
 // Sanwa JLF on a JLF-P1 plate (95 x 53 mm, mounting slots 84 x 40 mm),
 // plate turned so its long side runs front to back, clear of B4.
@@ -52,9 +46,9 @@ JLF_SCREWS = [for (p = [[20, 42], [-20, 42], [20, -42], [-20, -42]]) [p[0], p[1]
 JLF_PLATE = [53, 95];
 // 30 mm buttons, Vewlix, relative to the stick (same as the firmware's screen layout)
 B30 = [for (p = [[66, 10], [99, 24], [135, 24], [59, -28], [92, -15], [128, -15]]) [p[0], p[1] + CY]];
-// 24 mm buttons along the back, behind the main buttons and well away from
-// the stick hand, so they don't get knocked mid-game: SELECT, HOME, START
-B24 = [[49, 88], [78.5, 88], [108, 88]];
+// 24 mm buttons along the back, about 100 mm behind the stick's centre,
+// out of reach of the stick hand: SELECT, HOME, START
+B24 = [[-20, 88], [9.5, 88], [39, 88]];
 HOLE30 = 30.3;  CBORE30 = 35;     // Sanwa OBSF-30 snaps into 2-3.9 mm panels
 HOLE24 = 24.3;  CBORE24 = 29;
 SNAP = 3.0;                       // panel thickness left at the button clips
@@ -75,9 +69,9 @@ CLIP_BOSSES = [[SCR_X0 + 3, SCR_Y0 - 4.5], [X1 - W - 8, SCR_Y0 - 4.5],
                [SCR_X0 + 3, SCR_Y0 + SCR_W + 4.5], [X1 - W - 8, SCR_Y0 + SCR_W + 4.5]];
 
 // ---------- speaker (the one that came with the board) ----------
-SPK = [-45, 82];                 // grille centre, behind the stick
+SPK = [-52, 75];                 // grille centre, back left, long side front to back
 SPK_L = 44; SPK_W = 28; SPK_H = 9;   // rounded-rectangle speaker, measured by Ben
-module spk_shape(grow) { rr(-SPK_L / 2 - grow, -SPK_W / 2 - grow, SPK_L / 2 + grow, SPK_W / 2 + grow, 8 + grow); }
+module spk_shape(grow) { rotate(90) rr(-SPK_L / 2 - grow, -SPK_W / 2 - grow, SPK_L / 2 + grow, SPK_W / 2 + grow, 8 + grow); }
 
 // ---------- I/O board v1.0 (97 x 49.5 mm, holes from the KiCad file) ----------
 IO_X = 48; IO_Y = -61;           // board origin; KiCad y runs the other way
@@ -86,12 +80,12 @@ IO_STANDOFF = 5;
 
 // ---------- battery bay (1S LiPo) ----------
 // 585460 LiPo (5.8 x 54 x 60 mm, 2000 mAh), front left under your palm
-BAT = [-66, -108, -8, -44];      // x0, y0, x1, y1 inside the low walls
+BAT = [-56, -108, 2, -44];       // x0, y0, x1, y1 inside the low walls
 
 // ---------- weight trays ----------
 // A heavier stick stays put on your lap. Fill these with steel washers or
 // fishing sinkers (glue or hot-glue them in).
-WEIGHTS = [[-70, -38, -30, 40], [157, -40, 200, 40]];     // x0, y0, x1, y1 inside
+WEIGHTS = [[-60, -38, -30, 40], [95, 50, 155, 95]];       // x0, y0, x1, y1 inside (the second is under the screen)
 WEIGHT_H = 8;
 
 // ---------- anti-slip mat ----------
@@ -103,18 +97,9 @@ MAT_DEPTH = 1;
 
 // ---------- screws ----------
 // Base plate: M3 countersunk into 2.5 mm pilot holes (or M3 heat-set inserts: make them 4.0).
-BASE_BOSSES = [[-73, -103], [-79, 0], [-75, 100], [26, -106], [42, -106], [26, 106],
-               [42, 106], [120, 106], [175, -106], [203, -103], [206, 10], [180, 106]];
+BASE_BOSSES = [[-63, -103], [-69, 0], [-64, 106], [26, -106], [42, -106], [24, 106],
+               [62, 106], [120, 106], [150, 106], [160, -103], [163, 10]];
 PILOT = 2.5;
-// Splices under the top panel, across the seam (M3 x 10 pan head)
-SPLICES = [[SPLIT_X, -75], [SPLIT_X, 62]];
-SPLICE = [40, 18, 4];
-SPLICE_HOLES = [[-12, -4], [-12, 4], [12, -4], [12, 4]];
-PAD = 6;                          // splice pads below the panel
-// 1.75 mm filament as alignment pins across the seam
-PIN_D = 2.0; PIN_L = 6;
-PANEL_PINS = [-90, -60, -20, 20, 50, 104];
-WALL_PINS = [[Y0 + W / 2, 20], [Y0 + W / 2, 32], [Y1 - W / 2, 15], [Y1 - W / 2, 35]];
 
 // ---------- looks ----------
 ACCENT = 0.6;                     // depth of the second-colour inlays (3 layers at 0.2 mm)
@@ -126,7 +111,7 @@ RING30 = 17.5; RING24 = 14; RING_STICK = 21;   // inner radius of each ring
 SCR_FRAME = 3;                    // gap between the window's bevel and its frame
 STRIPES = [[8, 0], [3, 11]];      // racing stripes: width, offset in from the side
 STRIPE_X = 7;                     // stripes start this far in from the top's flat edge
-STRIPE_END = [55, 30];            // where the left / right pair stop (y), cut at 45 degrees
+STRIPE_END = [45, -50];           // where the left / right pair stop (y), cut at 45 degrees
 LOGO = "ARCADE STICK";
 LOGO_AT = [100, -88]; LOGO_SIZE = 6;
 GRIP = [90, 9];                   // finger scoops under the left and right sides: length, height
@@ -220,9 +205,6 @@ module inside_parts() {
   ztop = H - T;
   // base screw bosses
   for (p = BASE_BOSSES) translate([p[0], p[1], BASE]) cylinder(d = 8, h = ztop - BASE + 0.1);
-  // splice pads under the panel
-  for (s = SPLICES) translate([s[0] - SPLICE[0] / 2 - 2, s[1] - SPLICE[1] / 2 - 2, ztop - PAD])
-    cube([SPLICE[0] + 4, SPLICE[1] + 4, PAD + 0.1]);
   // screen: locating ribs round the board (open at the USB end) and clip bosses
   translate([0, 0, ztop - 3]) linear_extrude(3.1) difference() {
     translate([SCR_X0 - FIT - 1.2, SCR_Y0 - FIT - 1.2]) square([SCR_L + 2 * FIT + 1.2 + 4, SCR_W + 2 * FIT + 2.4]);
@@ -234,22 +216,13 @@ module inside_parts() {
     linear_extrude(5.1) spk_shape(2.8);
     translate([0, 0, -1]) linear_extrude(7.2) spk_shape(0.3);
   }
-  // pin bosses at the wall seam
-  for (w = WALL_PINS) translate([SPLIT_X - 5, w[0] < 0 ? Y0 + W - 0.1 : Y1 - W - 5, w[1] - 5]) cube([10, 5.1, 10]);
   // thicker wall behind the finger scoops
   for (x = [X0 + W - 0.1, X1 - W - 8]) translate([x, (Y0 + Y1) / 2 - GRIP[0] / 2 - 2, BASE]) cube([8.1, GRIP[0] + 4, GRIP[1] + 3]);
 }
 module inside_holes() {
   ztop = H - T;
   for (p = BASE_BOSSES) translate([p[0], p[1], BASE - 1]) cylinder(d = PILOT, h = 13);
-  for (s = SPLICES, h = SPLICE_HOLES) translate([s[0] + h[0], s[1] + h[1], ztop - PAD - 1]) cylinder(d = PILOT, h = PAD + 2);
   for (p = CLIP_BOSSES) translate([p[0], p[1], ztop - SCR_D - 1]) cylinder(d = PILOT, h = SCR_D + 3);
-}
-
-module seam_pins() {
-  for (y = PANEL_PINS) translate([SPLIT_X - PIN_L, y, H - T / 2]) rotate([0, 90, 0]) cylinder(d = PIN_D, h = 2 * PIN_L, $fn = 16);
-  for (w = WALL_PINS) translate([SPLIT_X - PIN_L, w[0] < 0 ? Y0 + W + 2.5 : Y1 - W - 2.5, w[1]])
-    rotate([0, 90, 0]) cylinder(d = PIN_D, h = 2 * PIN_L, $fn = 16);
 }
 
 module grips() {   // finger scoops under the left and right sides, 6 mm deep
@@ -290,16 +263,7 @@ module top_shell() {
     }
     panel_cuts();
     inside_holes();
-    seam_pins();
     grips();
-    // design line along the seam, so the joint reads as deliberate
-    translate([SPLIT_X - 0.5, Y0 - 1, H - 0.5]) cube([1, Y1 - Y0 + 2, 1]);
-  }
-}
-module half(left) {
-  intersection() {
-    children();
-    translate([left ? X0 - 10 : SPLIT_X, Y0 - 10, -10]) cube([left ? SPLIT_X - X0 + 10 : X1 - SPLIT_X + 10, Y1 - Y0 + 20, H + 20]);
   }
 }
 
@@ -331,28 +295,8 @@ module base_plate() {
     for (h = IO_HOLES) translate([IO_X + h[0], IO_Y - h[1], MAT_DEPTH + 0.6]) cylinder(d = PILOT, h = BASE + IO_STANDOFF);
   }
 }
-module base_half(left) {
-  // half-lap: the left piece keeps the lower half of the overlap, the right the upper
-  difference() {
-    intersection() {
-      base_plate();
-      union() {
-        translate([left ? X0 - 10 : BASE_SPLIT_X - LAP / 2, Y0 - 10, -10])
-          cube([left ? BASE_SPLIT_X + LAP / 2 - X0 + 10 : X1 - BASE_SPLIT_X + LAP / 2 + 10, Y1 - Y0 + 20, 40]);
-      }
-    }
-    if (left)  translate([BASE_SPLIT_X - LAP / 2, Y0 - 10, BASE / 2]) cube([LAP + 1, Y1 - Y0 + 20, BASE]);
-    else       translate([BASE_SPLIT_X - LAP / 2 - 1, Y0 - 10, -1]) cube([LAP + 1, Y1 - Y0 + 20, BASE / 2 + 1]);
-  }
-}
 
 // ---------- small parts ----------
-module splice() {
-  difference() {
-    translate([-SPLICE[0] / 2, -SPLICE[1] / 2, 0]) linear_extrude(SPLICE[2]) rr(0, 0, SPLICE[0], SPLICE[1], 3);
-    for (h = SPLICE_HOLES) translate([h[0], h[1], -1]) cylinder(d = 3.4, h = SPLICE[2] + 2);
-  }
-}
 module screen_clip() {
   difference() {
     linear_extrude(3) rr(-4, -4, 4, 8, 3);   // reaches 3 mm over the board's corner
@@ -412,12 +356,8 @@ else if (part == "check_5") check(5);
 else if (part == "check_6") check(6);
 else if (part == "check_7") check(7);
 else if (part == "check_8") check(8);
-// the top halves and their accents are exported face down, ready to print
-else if (part == "top_left")     face_down() difference() { half(true)  top_shell(); accent_volume(); }
-else if (part == "top_right")    face_down() difference() { half(false) top_shell(); accent_volume(); }
-else if (part == "accent_left")  face_down() intersection() { half(true)  top_shell(); accent_volume(); }
-else if (part == "accent_right") face_down() intersection() { half(false) top_shell(); accent_volume(); }
-else if (part == "base_left")    base_half(true);
-else if (part == "base_right")   base_half(false);
-else if (part == "splice")       splice();
+// the top and its accent are exported face down, ready to print
+else if (part == "top")          face_down() difference() { top_shell(); accent_volume(); }
+else if (part == "accent")       face_down() intersection() { top_shell(); accent_volume(); }
+else if (part == "base")         base_plate();
 else if (part == "screen_clip")  screen_clip();

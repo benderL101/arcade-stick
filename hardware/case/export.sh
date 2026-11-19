@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 OPENSCAD=${OPENSCAD:-openscad}
 command -v "$OPENSCAD" >/dev/null 2>&1 || OPENSCAD="/c/Program Files/OpenSCAD/openscad.com"
 mkdir -p stl images
-for p in top_left top_right accent_left accent_right base_left base_right splice screen_clip; do
+for p in top accent base screen_clip; do
   echo "== $p"
   "$OPENSCAD" -D "part=\"$p\"" -o "stl/$p.stl" arcade_stick_case.scad
 done
