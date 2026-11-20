@@ -7,11 +7,11 @@ A new, cleaner case for the arcade stick. It's 231 × 215 × 55 mm, small enough
 What's different from the first case:
 
 - **Rounded palm rest:** the front edge rolls into the top with a 20 mm radius, so there's no sharp edge under your wrists or forearms. It's the roundest shape that still prints face down without supports. The other top edges have a 4 mm, 45° chamfer.
-- **Room for your hands:** there's 99 mm between the front edge and the stick, and about 55 mm in front of the nearest button.
+- **Room for your hands:** there's 99 mm between the front edge and the stick, and about 55 mm in front of the nearest button. The six main buttons sit 6 mm closer to the stick than a standard Vewlix layout, so their outline stays on the flat top.
 - **START / SELECT / HOME** sit along the back, about 92 mm behind the stick's centre, out of reach of the stick hand.
 - **Stays put:** the whole bottom takes one anti-slip mat, instead of four small feet. It grips a desk and sits softly on your lap. Two trays inside take steel weights, because a heavier stick creeps less on your lap.
 - **Finger scoops:** shallow scoops under the left and right sides make it easy to pick up and hold on your lap.
-- **Two-colour top:** red rings round the stick and every button, a frame round the screen, a pair of racing stripes down each side, and ARCADE STICK in front of the buttons. They're 3 layers deep and print first, because the top prints face down.
+- **Two-colour top:** red rings round the stick and the three small buttons, one outline round the six main buttons (they're too close together for a ring each), a frame round the screen, a pair of racing stripes down each side, and ARCADE STICK in front of the buttons. They're 3 layers deep and print first, because the top prints face down.
 - **Two pieces, no seam:** one top and one bottom. There's nothing to glue, pin or splice.
 - **Bevelled screen window.** The USB-C port sits in a recess in the right side, so you can charge and flash with the case closed.
 - **Speaker grille** in the top at the back left, with a ring underneath to hold the speaker.

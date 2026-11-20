@@ -46,10 +46,12 @@ JLF_HOLE = 24;
 JLF_SCREWS = [for (p = [[20, 42], [-20, 42], [20, -42], [-20, -42]]) [p[0], p[1] + CY]];   // M4 countersunk
 JLF_PLATE = [53, 95];
 // 30 mm buttons, Vewlix, relative to the stick (same as the firmware's screen layout)
-B30 = [for (p = [[66, 10], [99, 24], [135, 24], [59, -28], [92, -15], [128, -15]]) [p[0], p[1] + CY]];
+// The whole group sits BX mm left of standard, so the rings stay on the flat top.
+BX = -6;
+B30 = [for (p = [[66, 10], [99, 24], [135, 24], [59, -28], [92, -15], [128, -15]]) [p[0] + BX, p[1] + CY]];
 // 24 mm buttons along the back, about 92 mm behind the stick's centre,
 // out of reach of the stick hand: SELECT, HOME, START
-B24 = [[-15, 82], [14.5, 82], [44, 82]];
+B24 = [[-20, 82], [14, 82], [48, 82]];   // 34 mm apart, so their rings don't touch
 HOLE30 = 30.3;  CBORE30 = 35;     // Sanwa OBSF-30 snaps into 2-3.9 mm panels
 HOLE24 = 24.3;  CBORE24 = 29;
 SNAP = 3.0;                       // panel thickness left at the button clips
@@ -109,12 +111,17 @@ ACCENT = 0.6;                     // depth of the second-colour inlays (3 layers
 // in front of the buttons.
 LINE = 2;                         // width of the outlines and rings
 RING30 = 17.5; RING24 = 14; RING_STICK = 21;   // inner radius of each ring
+// The six main buttons are closer together (35.5 mm) than their rings are
+// wide (39 mm), so they can't have plain rings:
+//   "outline" = one outline round the whole group, following each button
+//   "broken"  = a ring each, stopping 1.5 mm short of its neighbours
+RING_STYLE = "outline";
 SCR_FRAME = 3;                    // gap between the window's bevel and its frame
 STRIPES = [[8, 0], [3, 11]];      // racing stripes: width, offset in from the side
 STRIPE_X = 7;                     // stripes start this far in from the top's flat edge
 STRIPE_END = [38, -56];           // where the left / right pair stop (y), cut at 45 degrees
 LOGO = "ARCADE STICK";
-LOGO_AT = [92, -80]; LOGO_SIZE = 6;
+LOGO_AT = [86, -80]; LOGO_SIZE = 6;
 GRIP = [70, 9];                   // finger scoops under the left and right sides: length, height
 GRIP_Y = -42;                     // scoop centre, forward of the right-hand buttons
 
@@ -240,11 +247,21 @@ module grips() {   // finger scoops under the left and right sides, 6 mm deep
 }
 
 module ring(r) { difference() { circle(r = r + LINE); circle(r = r); } }
+// The six main buttons' discs merged into one island, with the gaps between
+// them rounded off, so its outline follows each button without crossing.
+module b30_island() { offset(r = -12) offset(r = 12) for (p = B30) translate(p) circle(r = RING30 + 0.5); }
 module accent_shape() {
   vx = SCR_X0 + VIS_X; vy = SCR_Y0 + SCR_W / 2;
   // rings round the stick and the buttons
   translate(STICK) ring(RING_STICK);
-  for (p = B30) translate(p) ring(RING30);
+  if (RING_STYLE == "outline") difference() {
+    offset(r = LINE) b30_island();
+    b30_island();
+  }
+  else for (i = [0:len(B30) - 1]) difference() {
+    translate(B30[i]) ring(RING30);
+    for (j = [0:len(B30) - 1]) if (j != i) translate(B30[j]) circle(r = RING30 + LINE + 1.5);
+  }
   for (p = B24) translate(p) ring(RING24);
   // frame round the screen window (outside its bevel)
   fx = VIS_L / 2 + 0.5 + 2 + SCR_FRAME; fy = VIS_W / 2 + 0.5 + 2 + SCR_FRAME;
@@ -372,3 +389,4 @@ else if (part == "top")          face_down() difference() { top_shell(); accent_
 else if (part == "accent")       face_down() intersection() { top_shell(); accent_volume(); }
 else if (part == "base")         base_plate();
 else if (part == "screen_clip")  screen_clip();
+else if (part == "design")       { color([0.13,0.14,0.16]) linear_extrude(1) outline(C, PALM); color([0.85,0.23,0.25]) translate([0, 0, 1]) linear_extrude(0.5) accent_shape(); }   // flat preview of the top's design
