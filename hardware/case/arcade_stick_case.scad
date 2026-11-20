@@ -2,8 +2,9 @@
 //  Arcade Stick case v2: Sanwa JLF + 6 x 30 mm (Vewlix) + 3 x 24 mm,
 //  Freenove FNK0104 2.8" screen, I/O board v1.0, 1S LiPo.
 //
-//  247 x 227 x 55 mm, so the top and the base each print in one piece on
-//  a 256 mm bed. The top prints upside down (top face on the bed), so no
+//  231 x 215 x 55 mm, so the top and the base each print in one piece on
+//  a 256 mm bed, clear of the X1's no-print corner, with room left for the
+//  prime tower. The top prints upside down (top face on the bed), so no
 //  surface is shallower than 45 degrees and nothing needs supports. The
 //  front edge is a rounded palm rest.
 //
@@ -16,8 +17,8 @@ part = "assembly";
 $fn = 72;
 
 // ---------- overall shape ----------
-X0 = -75;  X1 = 172;     // left / right outside edges
-Y0 = -115; Y1 = 112;     // front (wrist side) / back: 105 mm of palm room in front of the stick
+X0 = -75;  X1 = 156;     // left / right outside edges
+Y0 = -109; Y1 = 106;     // front (wrist side) / back: 99 mm of palm room in front of the stick
 H  = 55;                 // total height
 R  = 16;                 // corner radius, seen from above
 W  = 3;                  // wall thickness
@@ -46,9 +47,9 @@ JLF_SCREWS = [for (p = [[20, 42], [-20, 42], [20, -42], [-20, -42]]) [p[0], p[1]
 JLF_PLATE = [53, 95];
 // 30 mm buttons, Vewlix, relative to the stick (same as the firmware's screen layout)
 B30 = [for (p = [[66, 10], [99, 24], [135, 24], [59, -28], [92, -15], [128, -15]]) [p[0], p[1] + CY]];
-// 24 mm buttons along the back, about 100 mm behind the stick's centre,
+// 24 mm buttons along the back, about 92 mm behind the stick's centre,
 // out of reach of the stick hand: SELECT, HOME, START
-B24 = [[-20, 88], [9.5, 88], [39, 88]];
+B24 = [[-15, 82], [14.5, 82], [44, 82]];
 HOLE30 = 30.3;  CBORE30 = 35;     // Sanwa OBSF-30 snaps into 2-3.9 mm panels
 HOLE24 = 24.3;  CBORE24 = 29;
 SNAP = 3.0;                       // panel thickness left at the button clips
@@ -61,7 +62,7 @@ SCR_L = 85; SCR_W = 50; SCR_D = 4; SCR_PARTS = 8;
 VIS_L = 59; VIS_W = 44;          // window = lit area (59 + 2 x 0.5 margin = 60)
 VIS_X = 38.6;                    // picture centre, from the board's MIC end
 SCR_X0 = X1 - W - FIT - SCR_L;   // MIC end on the left, USB end against the right wall
-SCR_Y0 = 46;                     // clear of the rounded back-right corner
+SCR_Y0 = 40;                     // clear of the buttons' rings, and of the rounded back-right corner
 USB_Y = SCR_Y0 + SCR_W / 2;      // USB-C sits about mid-edge (the slot allows +/- 3.5 mm)
 USB_Z = H - T - SCR_D - 1.6;
 // clips press on the board's corners, clear of the connectors along its long edges
@@ -69,23 +70,23 @@ CLIP_BOSSES = [[SCR_X0 + 3, SCR_Y0 - 4.5], [X1 - W - 8, SCR_Y0 - 4.5],
                [SCR_X0 + 3, SCR_Y0 + SCR_W + 4.5], [X1 - W - 8, SCR_Y0 + SCR_W + 4.5]];
 
 // ---------- speaker (the one that came with the board) ----------
-SPK = [-52, 75];                 // grille centre, back left, long side front to back
+SPK = [-52, 70];                 // grille centre, back left, long side front to back
 SPK_L = 44; SPK_W = 28; SPK_H = 9;   // rounded-rectangle speaker, measured by Ben
 module spk_shape(grow) { rotate(90) rr(-SPK_L / 2 - grow, -SPK_W / 2 - grow, SPK_L / 2 + grow, SPK_W / 2 + grow, 8 + grow); }
 
 // ---------- I/O board v1.0 (97 x 49.5 mm, holes from the KiCad file) ----------
-IO_X = 48; IO_Y = -61;           // board origin; KiCad y runs the other way
+IO_X = 40; IO_Y = -59;           // board origin; KiCad y runs the other way
 IO_HOLES = [[5, 23], [91.5, 5], [91.5, 40]];
 IO_STANDOFF = 5;
 
 // ---------- battery bay (1S LiPo) ----------
 // 585460 LiPo (5.8 x 54 x 60 mm, 2000 mAh), front left under your palm
-BAT = [-56, -108, 2, -44];       // x0, y0, x1, y1 inside the low walls
+BAT = [-56, -102, 2, -38];       // x0, y0, x1, y1 inside the low walls
 
 // ---------- weight trays ----------
 // A heavier stick stays put on your lap. Fill these with steel washers or
 // fishing sinkers (glue or hot-glue them in).
-WEIGHTS = [[-60, -38, -30, 40], [95, 50, 155, 95]];       // x0, y0, x1, y1 inside (the second is under the screen)
+WEIGHTS = [[-60, -30, -30, 40], [80, 40, 140, 86]];       // x0, y0, x1, y1 inside (the second is under the screen)
 WEIGHT_H = 8;
 
 // ---------- anti-slip mat ----------
@@ -97,8 +98,8 @@ MAT_DEPTH = 1;
 
 // ---------- screws ----------
 // Base plate: M3 countersunk into 2.5 mm pilot holes (or M3 heat-set inserts: make them 4.0).
-BASE_BOSSES = [[-63, -103], [-69, 0], [-64, 106], [26, -106], [42, -106], [24, 106],
-               [62, 106], [120, 106], [150, 106], [160, -103], [163, 10]];
+BASE_BOSSES = [[-63, -97], [-69, 0], [-66, 98], [22, -97], [29, 98], [62, 98],
+               [110, 98], [146, -97], [150, -50]];
 PILOT = 2.5;
 
 // ---------- looks ----------
@@ -111,10 +112,11 @@ RING30 = 17.5; RING24 = 14; RING_STICK = 21;   // inner radius of each ring
 SCR_FRAME = 3;                    // gap between the window's bevel and its frame
 STRIPES = [[8, 0], [3, 11]];      // racing stripes: width, offset in from the side
 STRIPE_X = 7;                     // stripes start this far in from the top's flat edge
-STRIPE_END = [45, -50];           // where the left / right pair stop (y), cut at 45 degrees
+STRIPE_END = [38, -56];           // where the left / right pair stop (y), cut at 45 degrees
 LOGO = "ARCADE STICK";
-LOGO_AT = [100, -88]; LOGO_SIZE = 6;
-GRIP = [90, 9];                   // finger scoops under the left and right sides: length, height
+LOGO_AT = [92, -80]; LOGO_SIZE = 6;
+GRIP = [70, 9];                   // finger scoops under the left and right sides: length, height
+GRIP_Y = -42;                     // scoop centre, forward of the right-hand buttons
 
 // =====================================================================
 S2 = sqrt(2);
@@ -216,8 +218,16 @@ module inside_parts() {
     linear_extrude(5.1) spk_shape(2.8);
     translate([0, 0, -1]) linear_extrude(7.2) spk_shape(0.3);
   }
-  // thicker wall behind the finger scoops
-  for (x = [X0 + W - 0.1, X1 - W - 8]) translate([x, (Y0 + Y1) / 2 - GRIP[0] / 2 - 2, BASE]) cube([8.1, GRIP[0] + 4, GRIP[1] + 3]);
+  // thicker wall behind the finger scoops, sloped at 45 degrees on top so
+  // it doesn't overhang when the top prints face down
+  for (side = [0, 1]) {
+    xw = side == 0 ? X0 + W - 0.1 : X1 - W + 0.1;     // the wall's inside face
+    dx = side == 0 ? 8.1 : -8.1;
+    hull() {
+      translate([min(xw, xw + dx), GRIP_Y - GRIP[0] / 2 - 2, BASE]) cube([8.1, GRIP[0] + 4, GRIP[1] + 3]);
+      translate([min(xw, xw + (side == 0 ? 0.1 : -0.1)), GRIP_Y - GRIP[0] / 2 - 2, BASE]) cube([0.1, GRIP[0] + 4, GRIP[1] + 3 + 8]);
+    }
+  }
 }
 module inside_holes() {
   ztop = H - T;
@@ -226,7 +236,7 @@ module inside_holes() {
 }
 
 module grips() {   // finger scoops under the left and right sides, 6 mm deep
-  for (x = [X0, X1]) translate([x, (Y0 + Y1) / 2, 0]) scale([6, GRIP[0] / 2, GRIP[1]]) sphere(r = 1, $fn = 48);
+  for (x = [X0, X1]) translate([x, GRIP_Y, 0]) scale([6, GRIP[0] / 2, GRIP[1]]) sphere(r = 1, $fn = 48);
 }
 
 module ring(r) { difference() { circle(r = r + LINE); circle(r = r); } }
@@ -356,6 +366,7 @@ else if (part == "check_5") check(5);
 else if (part == "check_6") check(6);
 else if (part == "check_7") check(7);
 else if (part == "check_8") check(8);
+else if (part == "check_9") { for (i = [0:8], j = [0:8]) if (j > i + (i == 0 ? 1 : 0)) intersection() { keepout(i); keepout(j); } }   // inside parts against each other
 // the top and its accent are exported face down, ready to print
 else if (part == "top")          face_down() difference() { top_shell(); accent_volume(); }
 else if (part == "accent")       face_down() intersection() { top_shell(); accent_volume(); }
